@@ -139,7 +139,6 @@ class MainActivity : AppCompatActivity() {
         autoButton = findViewById(R.id.autoButton)
         scanButton = findViewById(R.id.scanButton)
 
-        // Garantăm că geometria folosită de analizor este aceeași cu imaginea văzută de utilizator.
         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
 
         findViewById<Button>(R.id.loadButton).setOnClickListener {
@@ -203,7 +202,6 @@ class MainActivity : AppCompatActivity() {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
 
-            // 640x480 era prea puțin pentru ochiurile foarte fine de Petit Point.
             val analysis = ImageAnalysis.Builder()
                 .setTargetResolution(Size(1280, 720))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -302,15 +300,21 @@ class MainActivity : AppCompatActivity() {
         val detection = gridDetector.detect(frame)
         latestScannerConfidence = detection.confidence
 
-        val verticalView = detection.verticalLines.mapNotNull { x ->
-            val p = frame.frameToView(PointF(x, frame.height / 2f), viewWidth, viewHeight)
-            p.x.takeIf { it >= 0f && it <= viewWidth.toFloat() }
-        }.sorted()
+        val verticalView = detection.verticalLines
+            .map { x ->
+                val p = frame.frameToView(PointF(x, frame.height / 2f), viewWidth, viewHeight)
+                p.x
+            }
+            .filter { x -> x >= 0f && x <= viewWidth.toFloat() }
+            .sorted()
 
-        val horizontalView = detection.horizontalLines.mapNotNull { y ->
-            val p = frame.frameToView(PointF(frame.width / 2f, y), viewWidth, viewHeight)
-            p.y.takeIf { it >= 0f && it <= viewHeight.toFloat() }
-        }.sorted()
+        val horizontalView = detection.horizontalLines
+            .map { y ->
+                val p = frame.frameToView(PointF(frame.width / 2f, y), viewWidth, viewHeight)
+                p.y
+            }
+            .filter { y -> y >= 0f && y <= viewHeight.toFloat() }
+            .sorted()
 
         latestScannerColumns = (verticalView.size - 1).coerceAtLeast(0)
         latestScannerRows = (horizontalView.size - 1).coerceAtLeast(0)
