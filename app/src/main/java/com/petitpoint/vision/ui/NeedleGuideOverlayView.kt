@@ -69,13 +69,11 @@ class NeedleGuideOverlayView @JvmOverloads constructor(
         color = Color.WHITE
         textSize = 44f * scaledDensity
         textAlign = Paint.Align.CENTER
-        fakeBoldText = true
     }
     private val messagePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textSize = 17f * scaledDensity
         textAlign = Paint.Align.CENTER
-        fakeBoldText = true
     }
     private val confidencePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.LTGRAY
