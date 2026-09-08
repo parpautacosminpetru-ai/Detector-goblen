@@ -103,6 +103,18 @@
                     android:text="@string/load_pattern" />
 
                 <Button
+                    android:id="@+id/legendButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Coduri din poze" />
+
+                <Button
+                    android:id="@+id/codeButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Alege cod" />
+
+                <Button
                     android:id="@+id/gridButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -112,7 +124,7 @@
                     android:id="@+id/symbolButton"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/choose_symbol" />
+                    android:text="Simbol manual" />
 
                 <Button
                     android:id="@+id/calibrateButton"
