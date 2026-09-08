@@ -11,8 +11,8 @@ android {
         applicationId = "com.petitpoint.vision"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.9.0"
+        versionCode = 10
+        versionName = "0.10.0"
     }
 
     buildTypes {
@@ -48,6 +48,5 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
-    // OCR inclus în APK: recunoaștem automat numărul "Page N" când se încarcă mai multe pagini.
     implementation("com.google.mlkit:text-recognition:16.0.1")
 }
