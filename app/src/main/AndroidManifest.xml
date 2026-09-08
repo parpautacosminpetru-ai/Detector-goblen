@@ -13,7 +13,7 @@
         android:theme="@style/Theme.PetitPointVision">
 
         <activity
-            android:name=".MainActivity"
+            android:name=".GoblenActivity"
             android:exported="true"
             android:screenOrientation="sensorPortrait">
             <intent-filter>
@@ -21,6 +21,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:screenOrientation="sensorPortrait" />
 
     </application>
 
