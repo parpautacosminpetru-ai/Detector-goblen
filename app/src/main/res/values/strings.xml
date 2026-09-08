@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Petit Point Vision</string>
+    <string name="load_pattern">Încarcă tipar</string>
+    <string name="grid_settings">Grilă</string>
+    <string name="choose_symbol">Alege simbol</string>
+    <string name="calibrate">Calibrează</string>
+    <string name="reset">Reset</string>
+</resources>
