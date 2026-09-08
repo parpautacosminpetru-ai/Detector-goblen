@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:keepScreenOn="true">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:scaleType="fillCenter" />
+
+    <com.petitpoint.vision.ui.PatternOverlayView
+        android:id="@+id/overlayView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:orientation="vertical"
+        android:background="#AA000000">
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="10dp"
+            android:text="Goblenul meu"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/pageText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="7dp"
+            android:text="Pagina 1/16"
+            android:textColor="#B8F7FF"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#E8111111"
+        android:orientation="vertical"
+        android:paddingTop="5dp"
+        android:paddingBottom="7dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp">
+
+            <Button
+                android:id="@+id/prevPageButton"
+                android:layout_width="52dp"
+                android:layout_height="44dp"
+                android:text="◀" />
+
+            <Button
+                android:id="@+id/importPageButton"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:text="Încarcă pagina" />
+
+            <Button
+                android:id="@+id/nextPageButton"
+                android:layout_width="52dp"
+                android:layout_height="44dp"
+                android:text="▶" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp">
+
+            <EditText
+                android:id="@+id/codeInput"
+                android:layout_width="0dp"
+                android:layout_height="46dp"
+                android:layout_weight="1"
+                android:hint="Cartela 1–59"
+                android:imeOptions="actionSearch"
+                android:inputType="number"
+                android:maxLines="1"
+                android:singleLine="true"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#BBBBBB" />
+
+            <Button
+                android:id="@+id/searchCodeButton"
+                android:layout_width="wrap_content"
+                android:layout_height="46dp"
+                android:text="Caută" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="58dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
+
+            <ImageView
+                android:id="@+id/symbolPreview"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="#FFFFFF"
+                android:contentDescription="Simbol cartelă"
+                android:padding="4dp"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:id="@+id/symbolText"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center_vertical"
+                android:paddingStart="10dp"
+                android:text="Caută o cartelă. Pe pânză apare simbolul, nu cifra."
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp">
+
+            <Button
+                android:id="@+id/learnSymbolButton"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:text="Învață simbolul" />
+
+            <Button
+                android:id="@+id/calibrateButton"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:text="Calibrează" />
+
+            <Button
+                android:id="@+id/clearCalibrationButton"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:text="Recalibrare" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp">
+
+            <Button
+                android:id="@+id/prevTargetButton"
+                android:layout_width="52dp"
+                android:layout_height="44dp"
+                android:text="◀" />
+
+            <TextView
+                android:id="@+id/guideText"
+                android:layout_width="0dp"
+                android:layout_height="44dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:maxLines="1"
+                android:text="Alege cartela"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/nextTargetButton"
+                android:layout_width="52dp"
+                android:layout_height="44dp"
+                android:text="▶" />
+        </LinearLayout>
+    </LinearLayout>
+
+</FrameLayout>
