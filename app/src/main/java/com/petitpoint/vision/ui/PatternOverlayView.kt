@@ -16,7 +16,7 @@ import com.petitpoint.vision.model.GridRegion
 
 /**
  * Suprapunere AR cu perspectivă. Patru puncte ancorează regiunea diagramei pe pânza reală.
- * Punctele pot fi apoi mutate automat de tracker fără ca utilizatorul să recalibreze manual.
+ * Poziția curentă din traseul de lucru este evidențiată separat și primește o săgeată de sens.
  */
 class PatternOverlayView @JvmOverloads constructor(
     context: Context,
@@ -39,6 +39,24 @@ class PatternOverlayView @JvmOverloads constructor(
     }
     private val symbolPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
         alpha = 130
+    }
+    private val focusFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.WHITE
+        alpha = 80
+    }
+    private val focusBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.MAGENTA
+        strokeWidth = 0.18f
+        alpha = 255
+    }
+    private val focusArrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.WHITE
+        strokeWidth = 0.13f
+        strokeCap = Paint.Cap.ROUND
+        alpha = 255
     }
     private val pointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -67,11 +85,14 @@ class PatternOverlayView @JvmOverloads constructor(
     private var targets: List<GridCell> = emptyList()
     private var completedCells: Set<GridCell> = emptySet()
     private var selectedSymbol: Bitmap? = null
+    private var focusedCell: GridCell? = null
+    private var focusedHorizontalDirection = 1
 
     fun configureGrid(rows: Int, cols: Int, gridRegion: GridRegion) {
         totalRows = rows.coerceAtLeast(1)
         totalCols = cols.coerceAtLeast(1)
         region = sanitizeRegion(gridRegion)
+        focusedCell = null
         clearCalibration()
         invalidate()
     }
@@ -79,11 +100,18 @@ class PatternOverlayView @JvmOverloads constructor(
     fun setTargets(cells: List<GridCell>, symbolBitmap: Bitmap?) {
         targets = cells
         selectedSymbol = symbolBitmap
+        if (focusedCell != null && !targets.contains(focusedCell)) focusedCell = null
         invalidate()
     }
 
     fun setCompletedCells(cells: Set<GridCell>) {
         completedCells = cells.toSet()
+        invalidate()
+    }
+
+    fun setFocusedCell(cell: GridCell?, horizontalDirection: Int) {
+        focusedCell = cell
+        focusedHorizontalDirection = if (horizontalDirection >= 0) 1 else -1
         invalidate()
     }
 
@@ -113,7 +141,6 @@ class PatternOverlayView @JvmOverloads constructor(
     fun calibrationPointsSnapshot(): List<PointF> =
         calibrationPoints.map { PointF(it.x, it.y) }
 
-    /** Primește cele patru puncte rafinate de trackerul din fluxul camerei. */
     fun setTrackedCalibrationPoints(points: List<PointF>) {
         if (points.size != 4) return
         calibrationPoints.clear()
@@ -123,10 +150,6 @@ class PatternOverlayView @JvmOverloads constructor(
         invalidate()
     }
 
-    /**
-     * CameraX face zoom prin crop în jurul centrului. Scalarea punctelor în jurul centrului e o
-     * aproximație foarte bună instantanee, după care trackerul live rafinează poziția.
-     */
     fun scaleCalibrationAbout(centerX: Float, centerY: Float, factor: Float) {
         if (calibrationPoints.size != 4 || !factor.isFinite() || factor <= 0f) return
         for (point in calibrationPoints) {
@@ -171,19 +194,53 @@ class PatternOverlayView @JvmOverloads constructor(
             .filterNot { completedCells.contains(it) }
 
         for (cell in visibleTargets) {
-            val rect = RectF(
-                cell.col.toFloat(),
-                cell.row.toFloat(),
-                cell.col + 1f,
-                cell.row + 1f
-            )
+            val rect = cellRect(cell)
             canvas.drawRect(rect, targetPaint)
             selectedSymbol?.let { symbol ->
                 canvas.drawBitmap(symbol, null, rect, symbolPaint)
             }
             canvas.drawRect(rect, borderPaint)
         }
+
+        val focus = focusedCell
+        if (focus != null && region.contains(focus) && !completedCells.contains(focus)) {
+            drawFocusedCell(canvas, focus)
+        }
+
         canvas.restore()
+    }
+
+    private fun cellRect(cell: GridCell): RectF = RectF(
+        cell.col.toFloat(),
+        cell.row.toFloat(),
+        cell.col + 1f,
+        cell.row + 1f
+    )
+
+    private fun drawFocusedCell(canvas: Canvas, cell: GridCell) {
+        val rect = cellRect(cell)
+        canvas.drawRect(rect, focusFillPaint)
+        canvas.drawRect(
+            RectF(rect.left - 0.08f, rect.top - 0.08f, rect.right + 0.08f, rect.bottom + 0.08f),
+            focusBorderPaint
+        )
+
+        val cy = cell.row + 0.5f
+        val startX: Float
+        val endX: Float
+        if (focusedHorizontalDirection > 0) {
+            startX = cell.col + 0.18f
+            endX = cell.col + 0.82f
+        } else {
+            startX = cell.col + 0.82f
+            endX = cell.col + 0.18f
+        }
+        canvas.drawLine(startX, cy, endX, cy, focusArrowPaint)
+
+        val head = 0.16f
+        val sign = if (focusedHorizontalDirection > 0) 1f else -1f
+        canvas.drawLine(endX, cy, endX - sign * head, cy - head, focusArrowPaint)
+        canvas.drawLine(endX, cy, endX - sign * head, cy + head, focusArrowPaint)
     }
 
     private fun drawCalibrationGuides(canvas: Canvas) {
