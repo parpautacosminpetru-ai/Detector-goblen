@@ -58,20 +58,34 @@ class PatternGrid(
         return Bitmap.createBitmap(bitmap, left, top, width, height)
     }
 
-    fun matchingCells(reference: GridCell, maxDistance: Float = 0.18f): List<GridCell> {
-        val referenceFingerprint = fingerprint(reference)
-        val result = ArrayList<GridCell>()
+    fun matchingCells(reference: GridCell, maxDistance: Float = 0.18f): List<GridCell> =
+        matchingFingerprint(fingerprint(reference), maxDistance)
+
+    /**
+     * Caută în diagramă forma unui simbol care a venit din fotografia legendei codurilor.
+     * Pragul este ușor adaptiv: repetările aceluiași simbol pot avea mici variații de scanare.
+     */
+    fun matchingFingerprint(referenceFingerprint: BooleanArray, maxDistance: Float = 0.30f): List<GridCell> {
+        if (referenceFingerprint.isEmpty()) return emptyList()
+
+        val scored = ArrayList<Pair<GridCell, Float>>(rows * cols)
+        var bestDistance = 1f
 
         for (row in 0 until rows) {
             for (col in 0 until cols) {
                 val cell = GridCell(row, col)
                 val distance = SymbolFingerprint.distance(referenceFingerprint, fingerprint(cell))
-                if (distance <= maxDistance) {
-                    result.add(cell)
-                }
+                bestDistance = minOf(bestDistance, distance)
+                scored.add(cell to distance)
             }
         }
-        return result
+
+        if (bestDistance > maxDistance) return emptyList()
+        val adaptiveThreshold = minOf(maxDistance, maxOf(0.20f, bestDistance + 0.08f))
+        return scored.asSequence()
+            .filter { it.second <= adaptiveThreshold }
+            .map { it.first }
+            .toList()
     }
 
     private fun fingerprint(cell: GridCell): BooleanArray =

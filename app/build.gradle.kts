@@ -11,8 +11,8 @@ android {
         applicationId = "com.petitpoint.vision"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
     }
 
     buildTypes {
@@ -47,4 +47,7 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
+
+    // Model OCR Latin inclus în APK: codurile din legenda fotografiată se citesc fără internet.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }

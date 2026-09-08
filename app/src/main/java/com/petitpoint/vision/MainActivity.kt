@@ -32,6 +32,11 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.petitpoint.vision.model.CodeLegendEntry
 import com.petitpoint.vision.model.GridCell
 import com.petitpoint.vision.model.GridRegion
 import com.petitpoint.vision.model.PatternGrid
@@ -41,11 +46,15 @@ import com.petitpoint.vision.ui.ScannerOverlayView
 import com.petitpoint.vision.vision.AnchorTracker
 import com.petitpoint.vision.vision.GrayFrame
 import com.petitpoint.vision.vision.GridDetector
+import com.petitpoint.vision.vision.LegendCodeExtractor
 import com.petitpoint.vision.vision.ProgressDetector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -68,7 +77,13 @@ class MainActivity : AppCompatActivity() {
     private var gridCols = 100
     private var currentRegion = GridRegion(0, 0, 100, 100)
     private var selectedCell: GridCell? = null
+    private var selectedCode: String? = null
     private var targetCount = 0
+
+    private val codeLegend = LinkedHashMap<String, CodeLegendEntry>()
+    private val textRecognizer by lazy {
+        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    }
 
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val anchorTracker = AnchorTracker()
@@ -118,12 +133,17 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            try {
-                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: SecurityException) {
-                // Unele aplicații de fișiere nu oferă permisiune persistentă; citirea curentă funcționează.
-            }
+            persistReadPermission(uri)
             loadPattern(uri)
+        }
+    }
+
+    private val legendPickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach(::persistReadPermission)
+            loadLegendPhotos(uris)
         }
     }
 
@@ -144,6 +164,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.loadButton).setOnClickListener {
             patternPickerLauncher.launch(arrayOf("image/*"))
         }
+        findViewById<Button>(R.id.legendButton).setOnClickListener {
+            legendPickerLauncher.launch(arrayOf("image/*"))
+        }
+        findViewById<Button>(R.id.codeButton).setOnClickListener { showRecognizedCodes() }
         findViewById<Button>(R.id.gridButton).setOnClickListener { showGridDialog() }
         findViewById<Button>(R.id.symbolButton).setOnClickListener { showSymbolPicker() }
         findViewById<Button>(R.id.calibrateButton).setOnClickListener { beginCalibration() }
@@ -178,11 +202,20 @@ class MainActivity : AppCompatActivity() {
             anchorTracker.reset()
             progressDetector.resetBaselineKeepCompleted()
             trackingLostAnnounced = false
-            status("Aliniere fixată. Scannerul vede separat grila, iar progresul se învață local. $targetCount poziții urmărite.")
+            val label = selectedCode?.let { "codul $it" } ?: "simbolul selectat"
+            status("Aliniere fixată pentru $label. $targetCount poziții sunt suprapuse pe ochiuri.")
         }
 
         setupPinchZoom()
         requestCameraIfNeeded()
+    }
+
+    private fun persistReadPermission(uri: Uri) {
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: SecurityException) {
+            // Citirea curentă funcționează și dacă furnizorul nu oferă permisiune persistentă.
+        }
     }
 
     private fun requestCameraIfNeeded() {
@@ -225,9 +258,9 @@ class MainActivity : AppCompatActivity() {
             )
             status(
                 if (patternBitmap == null) {
-                    "Camera live. SCAN caută deja grila; pentru coduri încarcă și diagrama."
+                    "Camera live. SCAN caută grila. Încarcă diagrama și pozele cu legenda codurilor."
                 } else {
-                    "Camera live. SCAN caută grila; alege simbolul pentru suprapunere."
+                    "Diagrama este încărcată. Poți citi codurile din pozele legendei sau alege simbolul manual."
                 }
             )
         }, ContextCompat.getMainExecutor(this))
@@ -262,7 +295,7 @@ class MainActivity : AppCompatActivity() {
                 } else if (!trackingLostAnnounced) {
                     trackingLostAnnounced = true
                     overlayView.post {
-                        status("AUTO a pierdut temporar reperele. SCAN rămâne activ; dacă nu revine, folosește Auto-aliniază sau Calibrează.")
+                        status("AUTO a pierdut temporar reperele. SCAN rămâne activ; folosește Auto-aliniază dacă e nevoie.")
                     }
                 }
             }
@@ -291,7 +324,8 @@ class MainActivity : AppCompatActivity() {
             val completed = progressDetector.completedSnapshot()
             overlayView.post {
                 overlayView.setCompletedCells(completed)
-                status("Detectate ${completed.size} executate din $targetCount pentru simbolul selectat.")
+                val codeLabel = selectedCode?.let { " pentru codul $it" } ?: ""
+                status("Detectate ${completed.size} executate din $targetCount$codeLabel.")
             }
         }
     }
@@ -350,12 +384,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun autoAlignFromScanner() {
         if (patternGrid == null || selectedCell == null) {
-            status("Pentru suprapunerea codului: încarcă diagrama și alege mai întâi simbolul. SCAN poate vedea grila și fără diagramă.")
+            status("Încarcă diagrama și alege un cod recunoscut sau un simbol manual înainte de Auto-aliniază.")
             return
         }
         val corners = latestScannerCorners.map { PointF(it.x, it.y) }
         if (latestScannerConfidence < 0.18f || corners.size != 4) {
-            status("SCAN nu are încă o grilă suficient de stabilă. Apropie camera, fă zoom și așteaptă să apară liniile verzi.")
+            status("SCAN nu are încă o grilă suficient de stabilă. Apropie camera și fă zoom până apar liniile verzi.")
             return
         }
 
@@ -364,7 +398,8 @@ class MainActivity : AppCompatActivity() {
         anchorTracker.reset()
         progressDetector.resetBaselineKeepCompleted()
         trackingLostAnnounced = false
-        status("Auto-aliniat pe grila detectată (≈$latestScannerColumns×$latestScannerRows celule vizibile). Dacă regiunea diagramei are alt număr, corectează din Grilă.")
+        val codeLabel = selectedCode?.let { " pentru codul $it" } ?: ""
+        status("Auto-aliniat$codeLabel pe grila detectată (≈$latestScannerColumns×$latestScannerRows celule vizibile).")
     }
 
     private fun mapTargetsToFrame(
@@ -482,6 +517,7 @@ class MainActivity : AppCompatActivity() {
             patternBitmap?.takeIf { !it.isRecycled }?.recycle()
             patternBitmap = bitmap
             selectedCell = null
+            selectedCode = null
             targetCount = 0
             analysisTargets = emptyList()
             analysisCalibration = emptyList()
@@ -489,9 +525,132 @@ class MainActivity : AppCompatActivity() {
             progressDetector.resetAll()
             overlayView.setCompletedCells(emptySet())
             rebuildPatternGrid()
-            status("Diagrama este încărcată. Configurează rândurile/coloanele, apoi atinge simbolul dorit.")
+            status("Diagrama este încărcată. Configurează grila, apoi apasă Coduri din poze sau Simbol manual.")
             showGridDialog()
         }
+    }
+
+    private fun loadLegendPhotos(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+
+        overlayView.setTargets(emptyList(), null)
+        overlayView.setCompletedCells(emptySet())
+        selectedCell = null
+        selectedCode = null
+        analysisTargets = emptyList()
+        analysisCalibration = emptyList()
+        progressDetector.resetAll()
+        clearLegendEntries()
+        status("Citesc codurile și simbolurile din ${uris.size} poz${if (uris.size == 1) "ă" else "e"}…")
+
+        lifecycleScope.launch {
+            var readablePhotos = 0
+            for ((index, uri) in uris.withIndex()) {
+                status("OCR offline: poza ${index + 1}/${uris.size}…")
+                val bitmap = withContext(Dispatchers.IO) {
+                    contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+                } ?: continue
+
+                try {
+                    val text = recognizeText(bitmap)
+                    val entries = withContext(Dispatchers.Default) {
+                        LegendCodeExtractor.extract(bitmap, text)
+                    }
+                    if (entries.isNotEmpty()) readablePhotos++
+                    for (entry in entries) {
+                        val previous = codeLegend[entry.code]
+                        if (previous == null || entry.score > previous.score) {
+                            previous?.symbolBitmap?.takeIf { !it.isRecycled }?.recycle()
+                            codeLegend[entry.code] = entry
+                        } else {
+                            entry.symbolBitmap.takeIf { !it.isRecycled }?.recycle()
+                        }
+                    }
+                } catch (_: Throwable) {
+                    // Continuăm cu celelalte poze; mesajul final arată dacă s-a găsit ceva util.
+                } finally {
+                    if (!bitmap.isRecycled) bitmap.recycle()
+                }
+            }
+
+            if (codeLegend.isEmpty()) {
+                status("Nu am putut asocia coduri cu simboluri. Fotografiază legenda clar, drept, cu simbolul și codul pe același rând.")
+            } else {
+                status("Am recunoscut ${codeLegend.size} coduri cu simbol din $readablePhotos poz${if (readablePhotos == 1) "ă" else "e"}. Alege codul dorit.")
+                showRecognizedCodes()
+            }
+        }
+    }
+
+    private suspend fun recognizeText(bitmap: Bitmap): Text = suspendCancellableCoroutine { continuation ->
+        val task = textRecognizer.process(InputImage.fromBitmap(bitmap, 0))
+        task.addOnSuccessListener { result ->
+            if (continuation.isActive) continuation.resume(result)
+        }
+        task.addOnFailureListener { error ->
+            if (continuation.isActive) continuation.resumeWithException(error)
+        }
+    }
+
+    private fun showRecognizedCodes() {
+        if (codeLegend.isEmpty()) {
+            status("Nu am coduri citite încă. Apasă Coduri din poze și selectează fotografia/fotografiile cu legenda.")
+            return
+        }
+
+        val entries = codeLegend.values.sortedWith(
+            compareBy<CodeLegendEntry>({ it.code.toIntOrNull() == null }, { it.code.toIntOrNull() ?: Int.MAX_VALUE }, { it.code })
+        )
+        val labels = entries.map { entry -> "Cod ${entry.code}" }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle("Coduri recunoscute (${entries.size})")
+            .setMessage("Alege codul de ață. Aplicația va găsi simbolul lui în diagramă și îl va suprapune pe ochiurile pânzei.")
+            .setItems(labels) { _, which -> analyzeRecognizedCode(entries[which]) }
+            .setNegativeButton("Închide", null)
+            .show()
+    }
+
+    private fun analyzeRecognizedCode(entry: CodeLegendEntry) {
+        val grid = patternGrid
+        if (grid == null) {
+            status("Codul ${entry.code} a fost citit. Încarcă acum fotografia diagramei ca să găsesc simbolul în toate căsuțele.")
+            return
+        }
+
+        selectedCode = entry.code
+        selectedCell = null
+        status("Cod ${entry.code}: caut simbolul recunoscut în toată diagrama…")
+        lifecycleScope.launch {
+            val matches = withContext(Dispatchers.Default) {
+                grid.matchingFingerprint(entry.fingerprint, maxDistance = 0.30f)
+            }
+
+            if (matches.isEmpty()) {
+                analysisTargets = emptyList()
+                targetCount = 0
+                overlayView.setTargets(emptyList(), null)
+                status("Am citit codul ${entry.code}, dar simbolul extras din legendă nu se potrivește suficient cu diagrama. Poți reface poza legendei sau folosi Simbol manual.")
+                return@launch
+            }
+
+            selectedCell = matches.first()
+            targetCount = matches.size
+            analysisTargets = matches
+            analysisCalibration = emptyList()
+            anchorTracker.reset()
+            progressDetector.resetAll()
+            overlayView.setCompletedCells(emptySet())
+            overlayView.setTargets(matches, entry.symbolBitmap)
+            status("Cod ${entry.code} → simbol găsit în $targetCount căsuțe. Acum Auto-aliniază pe liniile verzi sau Calibrează manual.")
+        }
+    }
+
+    private fun clearLegendEntries() {
+        for (entry in codeLegend.values) {
+            entry.symbolBitmap.takeIf { !it.isRecycled }?.recycle()
+        }
+        codeLegend.clear()
     }
 
     private fun rebuildPatternGrid() {
@@ -568,9 +727,10 @@ class MainActivity : AppCompatActivity() {
                 analysisRegion = currentRegion
                 rebuildPatternGrid()
                 selectedCell = null
+                selectedCode = null
                 targetCount = 0
                 analysisTargets = emptyList()
-                status("Grilă: ${gridRows}×${gridCols}. Regiune cameră: ${visibleRows}×${visibleCols}. Alege simbolul.")
+                status("Grilă: ${gridRows}×${gridCols}. Regiune cameră: ${visibleRows}×${visibleCols}. Alege codul sau simbolul.")
             }
             .show()
     }
@@ -599,6 +759,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun analyzeSelectedSymbol(grid: PatternGrid, cell: GridCell) {
         selectedCell = cell
+        selectedCode = null
         status("Compar simbolul ales cu toate celulele diagramei…")
         lifecycleScope.launch {
             val result = withContext(Dispatchers.Default) {
@@ -613,7 +774,7 @@ class MainActivity : AppCompatActivity() {
             progressDetector.resetAll()
             overlayView.setCompletedCells(emptySet())
             overlayView.setTargets(result.first, result.second)
-            status("Simbol găsit în $targetCount căsuțe. Dacă vezi liniile verzi, poți apăsa Auto-aliniază; altfel Calibrează manual.")
+            status("Simbol manual găsit în $targetCount căsuțe. Poți apăsa Auto-aliniază sau Calibrează.")
         }
     }
 
@@ -623,7 +784,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (selectedCell == null) {
-            status("Alege mai întâi simbolul/codul pe care vrei să-l urmărești.")
+            status("Alege mai întâi un cod recunoscut sau un simbol manual.")
             return
         }
         analysisCalibration = emptyList()
@@ -662,12 +823,13 @@ class MainActivity : AppCompatActivity() {
         overlayView.setTargets(emptyList(), null)
         overlayView.setCompletedCells(emptySet())
         selectedCell = null
+        selectedCode = null
         targetCount = 0
         analysisTargets = emptyList()
         analysisCalibration = emptyList()
         anchorTracker.reset()
         progressDetector.resetAll()
-        status("Suprapunerea a fost resetată. SCAN continuă să detecteze grila live.")
+        status("Suprapunerea a fost resetată. Codurile citite rămân disponibile; poți alege alt cod.")
     }
 
     private fun parsePositive(field: EditText, fallback: Int): Int =
@@ -682,5 +844,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         analysisExecutor.shutdownNow()
+        textRecognizer.close()
+        clearLegendEntries()
     }
 }
