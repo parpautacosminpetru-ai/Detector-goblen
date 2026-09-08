@@ -3,6 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
     android:keepScreenOn="true">
 
     <androidx.camera.view.PreviewView
@@ -10,6 +11,11 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:scaleType="fillCenter" />
+
+    <com.petitpoint.vision.ui.ScannerOverlayView
+        android:id="@+id/scannerOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
     <com.petitpoint.vision.ui.PatternOverlayView
         android:id="@+id/overlayView"
@@ -20,17 +26,21 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
-        android:orientation="vertical"
-        android:background="#AA000000">
+        android:background="#CC000000"
+        android:orientation="vertical">
 
         <TextView
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:padding="10dp"
+            android:maxLines="2"
+            android:paddingStart="10dp"
+            android:paddingTop="7dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="4dp"
             android:text="Goblenul meu"
             android:textColor="#FFFFFF"
-            android:textSize="15sp" />
+            android:textSize="14sp" />
 
         <TextView
             android:id="@+id/pageText"
@@ -38,46 +48,64 @@
             android:layout_height="wrap_content"
             android:paddingStart="10dp"
             android:paddingEnd="10dp"
-            android:paddingBottom="7dp"
+            android:paddingBottom="3dp"
             android:text="Pagina 1/16"
             android:textColor="#B8F7FF"
-            android:textSize="13sp" />
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/scanText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="6dp"
+            android:text="GRILĂ: caut ochiurile…"
+            android:textColor="#77FFBB"
+            android:textSize="12sp" />
     </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:background="#E8111111"
+        android:background="#F0111111"
         android:orientation="vertical"
-        android:paddingTop="5dp"
-        android:paddingBottom="7dp">
+        android:paddingTop="4dp"
+        android:paddingBottom="5dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp">
+            android:paddingStart="5dp"
+            android:paddingEnd="5dp">
 
             <Button
                 android:id="@+id/prevPageButton"
-                android:layout_width="52dp"
-                android:layout_height="44dp"
+                android:layout_width="48dp"
+                android:layout_height="42dp"
                 android:text="◀" />
 
             <Button
                 android:id="@+id/importPageButton"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="42dp"
                 android:layout_weight="1"
-                android:text="Încarcă pagina" />
+                android:text="Pagina curentă" />
+
+            <Button
+                android:id="@+id/importAllPagesButton"
+                android:layout_width="0dp"
+                android:layout_height="42dp"
+                android:layout_weight="1"
+                android:text="Încarcă 16" />
 
             <Button
                 android:id="@+id/nextPageButton"
-                android:layout_width="52dp"
-                android:layout_height="44dp"
+                android:layout_width="48dp"
+                android:layout_height="42dp"
                 android:text="▶" />
         </LinearLayout>
 
@@ -111,7 +139,7 @@
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="58dp"
+            android:layout_height="56dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="8dp"
@@ -119,8 +147,8 @@
 
             <ImageView
                 android:id="@+id/symbolPreview"
-                android:layout_width="52dp"
-                android:layout_height="52dp"
+                android:layout_width="50dp"
+                android:layout_height="50dp"
                 android:background="#FFFFFF"
                 android:contentDescription="Simbol cartelă"
                 android:padding="4dp"
@@ -132,10 +160,11 @@
                 android:layout_height="match_parent"
                 android:layout_weight="1"
                 android:gravity="center_vertical"
+                android:maxLines="2"
                 android:paddingStart="10dp"
                 android:text="Caută o cartelă. Pe pânză apare simbolul, nu cifra."
                 android:textColor="#FFFFFF"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
         </LinearLayout>
 
         <LinearLayout
@@ -143,29 +172,29 @@
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp">
+            android:paddingStart="5dp"
+            android:paddingEnd="5dp">
 
             <Button
                 android:id="@+id/learnSymbolButton"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="43dp"
                 android:layout_weight="1"
-                android:text="Învață simbolul" />
+                android:text="Învață simbol" />
 
             <Button
                 android:id="@+id/calibrateButton"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="43dp"
                 android:layout_weight="1"
-                android:text="Calibrează" />
+                android:text="Aliniază 1×" />
 
             <Button
                 android:id="@+id/clearCalibrationButton"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="43dp"
                 android:layout_weight="1"
-                android:text="Recalibrare" />
+                android:text="Reset alin." />
         </LinearLayout>
 
         <LinearLayout
@@ -173,30 +202,30 @@
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp">
+            android:paddingStart="5dp"
+            android:paddingEnd="5dp">
 
             <Button
                 android:id="@+id/prevTargetButton"
-                android:layout_width="52dp"
-                android:layout_height="44dp"
+                android:layout_width="50dp"
+                android:layout_height="42dp"
                 android:text="◀" />
 
             <TextView
                 android:id="@+id/guideText"
                 android:layout_width="0dp"
-                android:layout_height="44dp"
+                android:layout_height="42dp"
                 android:layout_weight="1"
                 android:gravity="center"
                 android:maxLines="1"
                 android:text="Alege cartela"
                 android:textColor="#FFFFFF"
-                android:textSize="13sp" />
+                android:textSize="12sp" />
 
             <Button
                 android:id="@+id/nextTargetButton"
-                android:layout_width="52dp"
-                android:layout_height="44dp"
+                android:layout_width="50dp"
+                android:layout_height="42dp"
                 android:text="▶" />
         </LinearLayout>
     </LinearLayout>
