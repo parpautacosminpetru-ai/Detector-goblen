@@ -2,12 +2,13 @@ package com.petitpoint.vision.vision
 
 import com.petitpoint.vision.model.GridCell
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 
 /**
- * Detector de progres pentru Petit Point. Pentru fiecare celula tinta invata mai multe cadre de
- * referinta, apoi cauta o schimbare locala persistenta. Raza mostrei este adaptata la marimea
- * celulei pe ecran, ca sa nu ratam firul foarte fin.
+ * Detector de progres pentru Petit Point. Pentru fiecare celulă țintă învață mai multe cadre de
+ * referință, apoi caută o schimbare locală persistentă. În paralel, pentru celula curentă din traseu
+ * pornește detectorul experimental al acului vizibil și publică direcția până la ochiul țintă.
  */
 class ProgressDetector {
 
@@ -33,19 +34,29 @@ class ProgressDetector {
 
     private val baselines = HashMap<GridCell, Baseline>()
     private val completed = HashSet<GridCell>()
+    private val needleDetector = NeedleDetector()
     private var baselineAnnounced = false
+    private var needleFrameCounter = 0
+    private var lastNeedleFocus: GridCell? = null
 
     @Synchronized
     fun resetAll() {
         baselines.clear()
         completed.clear()
         baselineAnnounced = false
+        needleDetector.reset()
+        needleFrameCounter = 0
+        lastNeedleFocus = null
+        NeedleGuidanceState.clearDetection()
     }
 
     @Synchronized
     fun resetBaselineKeepCompleted() {
         baselines.clear()
         baselineAnnounced = false
+        needleDetector.reset()
+        needleFrameCounter = 0
+        NeedleGuidanceState.clearDetection()
     }
 
     @Synchronized
@@ -53,12 +64,17 @@ class ProgressDetector {
 
     @Synchronized
     fun process(frame: GrayFrame, samples: List<CellSample>): Result {
-        if (samples.isEmpty()) return Result()
+        if (samples.isEmpty()) {
+            NeedleGuidanceState.clearDetection()
+            return Result()
+        }
+
+        updateNeedleGuidance(frame, samples)
 
         val globalMean = frame.globalMean()
 
-        // Mai intai construim o referinta stabila din mai multe cadre; un singur cadru e prea fragil
-        // pentru petit point si poate prinde degetul imediat dupa calibrare.
+        // Mai întâi construim o referință stabilă din mai multe cadre; un singur cadru este prea
+        // fragil pentru Petit Point și poate prinde degetul imediat după calibrare.
         var readyInView = 0
         var baselinesInView = 0
         for (sample in samples) {
@@ -80,7 +96,8 @@ class ProgressDetector {
             if (current.samples >= BASELINE_FRAMES) readyInView++
         }
 
-        val enoughBaseline = baselinesInView > 0 && readyInView >= max(1, (baselinesInView * 0.70f).toInt())
+        val enoughBaseline = baselinesInView > 0 &&
+            readyInView >= max(1, (baselinesInView * 0.70f).toInt())
         if (!enoughBaseline) return Result()
 
         val baselineJustCaptured = !baselineAnnounced
@@ -99,7 +116,7 @@ class ProgressDetector {
             val meanDelta = abs(correctedMean - baseline.correctedMean)
             val gradientDelta = abs(stats.gradient - baseline.gradient)
 
-            // Firul poate avea aproape aceeasi luminozitate ca panza, de aceea muchiile cantaresc mai mult.
+            // Firul poate avea aproape aceeași luminozitate ca pânza, de aceea muchiile cântăresc mai mult.
             val distance = meanDelta * 0.58f + gradientDelta * 1.35f
             val threshold = (5.5f + baseline.gradient * 0.28f).coerceIn(6.2f, 12.5f)
             val hardOcclusion = threshold * 4.4f
@@ -114,14 +131,14 @@ class ProgressDetector {
             }
         }
 
-        // Mana/umbra modifica simultan multe celule; nu le marcam ca fiind cusute.
+        // Mâna/umbra modifică simultan multe celule; nu le marcăm ca fiind cusute.
         val maxAllowedChanged = max(7, (samples.size * 0.42f).toInt())
         if (candidates.size > maxAllowedChanged) {
             for (candidate in candidates) baselines[candidate.cell]?.consecutiveChanged = 0
             return Result(baselineJustCaptured = baselineJustCaptured, occlusionRejected = true)
         }
 
-        // Adaptare lenta la schimbari de expunere.
+        // Adaptare lentă la schimbări de expunere.
         for ((cell, stats) in stable) {
             val baseline = baselines[cell] ?: continue
             val correctedMean = stats.mean - globalMean
@@ -151,8 +168,105 @@ class ProgressDetector {
         )
     }
 
+    private fun updateNeedleGuidance(frame: GrayFrame, samples: List<CellSample>) {
+        val focus = NeedleGuidanceState.focusedCell()
+        if (focus == null) {
+            if (lastNeedleFocus != null) needleDetector.reset()
+            lastNeedleFocus = null
+            NeedleGuidanceState.clearDetection()
+            return
+        }
+
+        if (focus != lastNeedleFocus) {
+            lastNeedleFocus = focus
+            needleDetector.reset()
+            needleFrameCounter = 0
+            NeedleGuidanceState.clearDetection()
+        }
+
+        val sample = samples.firstOrNull { it.cell == focus }
+        if (sample == null) {
+            NeedleGuidanceState.clearDetection()
+            return
+        }
+
+        needleFrameCounter++
+        if (needleFrameCounter % NEEDLE_EVERY_N_FRAMES != 0) return
+
+        val searchRadius = (sample.radius * 9 + 18).coerceIn(48, 150)
+        val detection = needleDetector.detect(
+            frame = frame,
+            targetX = sample.frameX,
+            targetY = sample.frameY,
+            searchRadius = searchRadius
+        )
+
+        if (detection == null) {
+            NeedleGuidanceState.publish(
+                NeedleGuidanceState.Snapshot(
+                    frameWidth = frame.width,
+                    frameHeight = frame.height,
+                    targetX = sample.frameX,
+                    targetY = sample.frameY,
+                    arrow = "?",
+                    message = "AC: NU VĂD ACUL",
+                    confidence = 0f,
+                    aligned = false
+                )
+            )
+            return
+        }
+
+        val dx = sample.frameX - detection.tipX
+        val dy = sample.frameY - detection.tipY
+        val distance = hypot(dx, dy)
+        val tolerance = max(3.5f, sample.radius * 0.65f)
+        val aligned = distance <= tolerance
+
+        val arrow: String
+        val message: String
+        if (aligned) {
+            arrow = "✓"
+            message = "AC: AICI"
+        } else if (abs(dx) >= abs(dy)) {
+            if (dx > 0f) {
+                arrow = "→"
+                message = "AC: DREAPTA"
+            } else {
+                arrow = "←"
+                message = "AC: STÂNGA"
+            }
+        } else {
+            if (dy > 0f) {
+                arrow = "↓"
+                message = "AC: JOS"
+            } else {
+                arrow = "↑"
+                message = "AC: SUS"
+            }
+        }
+
+        NeedleGuidanceState.publish(
+            NeedleGuidanceState.Snapshot(
+                frameWidth = frame.width,
+                frameHeight = frame.height,
+                targetX = sample.frameX,
+                targetY = sample.frameY,
+                needleTipX = detection.tipX,
+                needleTipY = detection.tipY,
+                needleTailX = detection.tailX,
+                needleTailY = detection.tailY,
+                arrow = arrow,
+                message = message,
+                confidence = detection.confidence,
+                aligned = aligned
+            )
+        )
+    }
+
     private companion object {
         const val BASELINE_FRAMES = 6
         const val REQUIRED_STABLE_FRAMES = 4
+        const val NEEDLE_EVERY_N_FRAMES = 3
     }
 }
