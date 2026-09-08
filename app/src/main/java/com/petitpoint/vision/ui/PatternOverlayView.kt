@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import com.petitpoint.vision.model.GridCell
 import com.petitpoint.vision.model.GridRegion
+import com.petitpoint.vision.vision.NeedleGuidanceState
 
 /**
  * Suprapunere AR cu perspectivă. Patru puncte ancorează regiunea diagramei pe pânza reală.
@@ -93,6 +94,7 @@ class PatternOverlayView @JvmOverloads constructor(
         totalCols = cols.coerceAtLeast(1)
         region = sanitizeRegion(gridRegion)
         focusedCell = null
+        NeedleGuidanceState.setFocusedCell(null)
         clearCalibration()
         invalidate()
     }
@@ -100,7 +102,10 @@ class PatternOverlayView @JvmOverloads constructor(
     fun setTargets(cells: List<GridCell>, symbolBitmap: Bitmap?) {
         targets = cells
         selectedSymbol = symbolBitmap
-        if (focusedCell != null && !targets.contains(focusedCell)) focusedCell = null
+        if (focusedCell != null && !targets.contains(focusedCell)) {
+            focusedCell = null
+            NeedleGuidanceState.setFocusedCell(null)
+        }
         invalidate()
     }
 
@@ -112,6 +117,7 @@ class PatternOverlayView @JvmOverloads constructor(
     fun setFocusedCell(cell: GridCell?, horizontalDirection: Int) {
         focusedCell = cell
         focusedHorizontalDirection = if (horizontalDirection >= 0) 1 else -1
+        NeedleGuidanceState.setFocusedCell(cell)
         invalidate()
     }
 
@@ -133,6 +139,7 @@ class PatternOverlayView @JvmOverloads constructor(
         calibrationPoints.clear()
         calibrationMode = false
         perspective.reset()
+        NeedleGuidanceState.clearDetection()
         invalidate()
     }
 
