@@ -1,1 +1,0 @@
-v0.5: bară de căutare cod + ghidare zig-zag stânga→dreapta / dreapta→stânga.
