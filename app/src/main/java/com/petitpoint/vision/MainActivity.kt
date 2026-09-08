@@ -17,6 +17,7 @@ import android.text.InputType
 import android.util.Size
 import android.view.ScaleGestureDetector
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -69,6 +70,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var autoButton: Button
     private lateinit var scanButton: Button
 
+    private lateinit var codeSearchInput: EditText
+    private lateinit var codeSearchButton: Button
+    private lateinit var prevTargetButton: Button
+    private lateinit var nextTargetButton: Button
+    private lateinit var guidePositionText: TextView
+
     private var camera: Camera? = null
     private var patternBitmap: Bitmap? = null
     private var patternGrid: PatternGrid? = null
@@ -89,6 +96,10 @@ class MainActivity : AppCompatActivity() {
     private val anchorTracker = AnchorTracker()
     private val progressDetector = ProgressDetector()
     private val gridDetector = GridDetector()
+
+    private var navigationTargets: List<GridCell> = emptyList()
+    private var navigationIndex = -1
+    private var navigationCompleted: Set<GridCell> = emptySet()
 
     @Volatile
     private var autoTrackingEnabled = true
@@ -159,6 +170,12 @@ class MainActivity : AppCompatActivity() {
         autoButton = findViewById(R.id.autoButton)
         scanButton = findViewById(R.id.scanButton)
 
+        codeSearchInput = findViewById(R.id.codeSearchInput)
+        codeSearchButton = findViewById(R.id.codeSearchButton)
+        prevTargetButton = findViewById(R.id.prevTargetButton)
+        nextTargetButton = findViewById(R.id.nextTargetButton)
+        guidePositionText = findViewById(R.id.guidePositionText)
+
         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
 
         findViewById<Button>(R.id.loadButton).setOnClickListener {
@@ -175,6 +192,20 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.resetButton).setOnClickListener { resetOverlay() }
         autoButton.setOnClickListener { toggleAutoTracking() }
         scanButton.setOnClickListener { toggleScanner() }
+
+        codeSearchButton.setOnClickListener { searchCodeFromBar() }
+        codeSearchInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE) {
+                searchCodeFromBar()
+                true
+            } else {
+                false
+            }
+        }
+        prevTargetButton.setOnClickListener { moveGuidance(-1) }
+        nextTargetButton.setOnClickListener { moveGuidance(1) }
+        resetGuidanceUi()
+
         findViewById<Button>(R.id.rebaselineButton).setOnClickListener {
             progressDetector.resetBaselineKeepCompleted()
             status("Progresul rămas va fi reînvățat din mai multe cadre. Ține mâna în afara cadrului o clipă.")
@@ -204,6 +235,7 @@ class MainActivity : AppCompatActivity() {
             trackingLostAnnounced = false
             val label = selectedCode?.let { "codul $it" } ?: "simbolul selectat"
             status("Aliniere fixată pentru $label. $targetCount poziții sunt suprapuse pe ochiuri.")
+            applyGuidanceFocus(announce = false)
         }
 
         setupPinchZoom()
@@ -214,7 +246,7 @@ class MainActivity : AppCompatActivity() {
         try {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (_: SecurityException) {
-            // Citirea curentă funcționează și dacă furnizorul nu oferă permisiune persistentă.
+            // Unele aplicații de fișiere nu oferă permisiune persistentă.
         }
     }
 
@@ -260,7 +292,7 @@ class MainActivity : AppCompatActivity() {
                 if (patternBitmap == null) {
                     "Camera live. SCAN caută grila. Încarcă diagrama și pozele cu legenda codurilor."
                 } else {
-                    "Diagrama este încărcată. Poți citi codurile din pozele legendei sau alege simbolul manual."
+                    "Diagrama este încărcată. Citește codurile din poze sau caută un cod deja recunoscut."
                 }
             )
         }, ContextCompat.getMainExecutor(this))
@@ -323,7 +355,16 @@ class MainActivity : AppCompatActivity() {
         if (progress.newlyCompleted.isNotEmpty()) {
             val completed = progressDetector.completedSnapshot()
             overlayView.post {
+                navigationCompleted = completed
                 overlayView.setCompletedCells(completed)
+                val current = currentGuidanceCell()
+                if (current != null && completed.contains(current)) {
+                    if (!moveGuidance(1, automatic = true)) {
+                        applyGuidanceFocus(announce = false)
+                    }
+                } else {
+                    applyGuidanceFocus(announce = false)
+                }
                 val codeLabel = selectedCode?.let { " pentru codul $it" } ?: ""
                 status("Detectate ${completed.size} executate din $targetCount$codeLabel.")
             }
@@ -335,18 +376,12 @@ class MainActivity : AppCompatActivity() {
         latestScannerConfidence = detection.confidence
 
         val verticalView = detection.verticalLines
-            .map { x ->
-                val p = frame.frameToView(PointF(x, frame.height / 2f), viewWidth, viewHeight)
-                p.x
-            }
+            .map { x -> frame.frameToView(PointF(x, frame.height / 2f), viewWidth, viewHeight).x }
             .filter { x -> x >= 0f && x <= viewWidth.toFloat() }
             .sorted()
 
         val horizontalView = detection.horizontalLines
-            .map { y ->
-                val p = frame.frameToView(PointF(frame.width / 2f, y), viewWidth, viewHeight)
-                p.y
-            }
+            .map { y -> frame.frameToView(PointF(frame.width / 2f, y), viewWidth, viewHeight).y }
             .filter { y -> y >= 0f && y <= viewHeight.toFloat() }
             .sorted()
 
@@ -400,6 +435,7 @@ class MainActivity : AppCompatActivity() {
         trackingLostAnnounced = false
         val codeLabel = selectedCode?.let { " pentru codul $it" } ?: ""
         status("Auto-aliniat$codeLabel pe grila detectată (≈$latestScannerColumns×$latestScannerRows celule vizibile).")
+        applyGuidanceFocus(announce = false)
     }
 
     private fun mapTargetsToFrame(
@@ -524,8 +560,9 @@ class MainActivity : AppCompatActivity() {
             anchorTracker.reset()
             progressDetector.resetAll()
             overlayView.setCompletedCells(emptySet())
+            resetGuidance()
             rebuildPatternGrid()
-            status("Diagrama este încărcată. Configurează grila, apoi apasă Coduri din poze sau Simbol manual.")
+            status("Diagrama este încărcată. Configurează grila, apoi apasă Coduri din poze sau caută codul.")
             showGridDialog()
         }
     }
@@ -540,6 +577,7 @@ class MainActivity : AppCompatActivity() {
         analysisTargets = emptyList()
         analysisCalibration = emptyList()
         progressDetector.resetAll()
+        resetGuidance()
         clearLegendEntries()
         status("Citesc codurile și simbolurile din ${uris.size} poz${if (uris.size == 1) "ă" else "e"}…")
 
@@ -567,7 +605,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 } catch (_: Throwable) {
-                    // Continuăm cu celelalte poze; mesajul final arată dacă s-a găsit ceva util.
+                    // Continuăm cu celelalte poze.
                 } finally {
                     if (!bitmap.isRecycled) bitmap.recycle()
                 }
@@ -576,7 +614,8 @@ class MainActivity : AppCompatActivity() {
             if (codeLegend.isEmpty()) {
                 status("Nu am putut asocia coduri cu simboluri. Fotografiază legenda clar, drept, cu simbolul și codul pe același rând.")
             } else {
-                status("Am recunoscut ${codeLegend.size} coduri cu simbol din $readablePhotos poz${if (readablePhotos == 1) "ă" else "e"}. Alege codul dorit.")
+                codeSearchInput.hint = "Caută cod (${codeLegend.size} recunoscute)"
+                status("Am recunoscut ${codeLegend.size} coduri cu simbol din $readablePhotos poz${if (readablePhotos == 1) "ă" else "e"}. Scrie codul în bara de căutare.")
                 showRecognizedCodes()
             }
         }
@@ -592,34 +631,71 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showRecognizedCodes() {
+    private fun sortedLegendEntries(): List<CodeLegendEntry> = codeLegend.values.sortedWith(
+        compareBy<CodeLegendEntry>(
+            { it.code.toIntOrNull() == null },
+            { it.code.toIntOrNull() ?: Int.MAX_VALUE },
+            { it.code }
+        )
+    )
+
+    private fun showRecognizedCodes(entries: List<CodeLegendEntry> = sortedLegendEntries()) {
         if (codeLegend.isEmpty()) {
-            status("Nu am coduri citite încă. Apasă Coduri din poze și selectează fotografia/fotografiile cu legenda.")
+            status("Nu am coduri citite încă. Apasă Coduri din poze și selectează fotografiile cu legenda.")
+            return
+        }
+        if (entries.isEmpty()) {
+            status("Niciun cod nu corespunde căutării.")
             return
         }
 
-        val entries = codeLegend.values.sortedWith(
-            compareBy<CodeLegendEntry>({ it.code.toIntOrNull() == null }, { it.code.toIntOrNull() ?: Int.MAX_VALUE }, { it.code })
-        )
         val labels = entries.map { entry -> "Cod ${entry.code}" }.toTypedArray()
-
         AlertDialog.Builder(this)
             .setTitle("Coduri recunoscute (${entries.size})")
-            .setMessage("Alege codul de ață. Aplicația va găsi simbolul lui în diagramă și îl va suprapune pe ochiurile pânzei.")
+            .setMessage("Alege codul. Traseul va fi stânga → dreapta pe un rând și dreapta → stânga pe următorul.")
             .setItems(labels) { _, which -> analyzeRecognizedCode(entries[which]) }
             .setNegativeButton("Închide", null)
             .show()
     }
 
+    private fun searchCodeFromBar() {
+        if (codeLegend.isEmpty()) {
+            status("Întâi apasă Coduri din poze ca să citesc codurile și simbolurile din legendă.")
+            return
+        }
+
+        val query = codeSearchInput.text?.toString()?.trim().orEmpty()
+        if (query.isBlank()) {
+            showRecognizedCodes()
+            return
+        }
+
+        val exact = codeLegend.values.firstOrNull { it.code.equals(query, ignoreCase = true) }
+        if (exact != null) {
+            analyzeRecognizedCode(exact)
+            return
+        }
+
+        val partial = sortedLegendEntries().filter { it.code.contains(query, ignoreCase = true) }
+        when (partial.size) {
+            0 -> status("Codul «$query» nu apare între codurile recunoscute din poze.")
+            1 -> analyzeRecognizedCode(partial.first())
+            else -> showRecognizedCodes(partial)
+        }
+    }
+
     private fun analyzeRecognizedCode(entry: CodeLegendEntry) {
         val grid = patternGrid
         if (grid == null) {
-            status("Codul ${entry.code} a fost citit. Încarcă acum fotografia diagramei ca să găsesc simbolul în toate căsuțele.")
+            selectedCode = entry.code
+            codeSearchInput.setText(entry.code)
+            status("Codul ${entry.code} a fost citit. Încarcă fotografia diagramei ca să găsesc simbolul în toate căsuțele.")
             return
         }
 
         selectedCode = entry.code
         selectedCell = null
+        codeSearchInput.setText(entry.code)
         status("Cod ${entry.code}: caut simbolul recunoscut în toată diagrama…")
         lifecycleScope.launch {
             val matches = withContext(Dispatchers.Default) {
@@ -630,7 +706,8 @@ class MainActivity : AppCompatActivity() {
                 analysisTargets = emptyList()
                 targetCount = 0
                 overlayView.setTargets(emptyList(), null)
-                status("Am citit codul ${entry.code}, dar simbolul extras din legendă nu se potrivește suficient cu diagrama. Poți reface poza legendei sau folosi Simbol manual.")
+                resetGuidance()
+                status("Am citit codul ${entry.code}, dar simbolul extras din legendă nu se potrivește suficient cu diagrama. Refa poza legendei sau folosește Simbol manual.")
                 return@launch
             }
 
@@ -640,10 +717,102 @@ class MainActivity : AppCompatActivity() {
             analysisCalibration = emptyList()
             anchorTracker.reset()
             progressDetector.resetAll()
+            navigationCompleted = emptySet()
             overlayView.setCompletedCells(emptySet())
             overlayView.setTargets(matches, entry.symbolBitmap)
-            status("Cod ${entry.code} → simbol găsit în $targetCount căsuțe. Acum Auto-aliniază pe liniile verzi sau Calibrează manual.")
+            prepareGuidance(matches)
+            val visible = navigationTargets.size
+            status("Cod ${entry.code} → $targetCount poziții în diagramă, $visible în regiunea curentă. Urmează ◀/▶ în zig-zag și apoi Auto-aliniază.")
         }
+    }
+
+    private fun prepareGuidance(cells: List<GridCell>) {
+        val byRow = cells
+            .filter { currentRegion.contains(it) }
+            .groupBy { it.row }
+            .toSortedMap()
+
+        val ordered = ArrayList<GridCell>()
+        for ((row, rowCells) in byRow) {
+            val leftToRight = ((row - currentRegion.startRow) and 1) == 0
+            val sorted = if (leftToRight) {
+                rowCells.sortedBy { it.col }
+            } else {
+                rowCells.sortedByDescending { it.col }
+            }
+            ordered.addAll(sorted)
+        }
+
+        navigationTargets = ordered
+        navigationCompleted = progressDetector.completedSnapshot()
+        navigationIndex = navigationTargets.indexOfFirst { !navigationCompleted.contains(it) }
+        if (navigationIndex < 0 && navigationTargets.isNotEmpty()) navigationIndex = 0
+        applyGuidanceFocus(announce = false)
+    }
+
+    private fun currentGuidanceCell(): GridCell? =
+        navigationTargets.getOrNull(navigationIndex)
+
+    private fun directionFor(cell: GridCell): Int =
+        if (((cell.row - currentRegion.startRow) and 1) == 0) 1 else -1
+
+    private fun moveGuidance(step: Int, automatic: Boolean = false): Boolean {
+        if (navigationTargets.isEmpty() || navigationIndex !in navigationTargets.indices) {
+            if (!automatic) status("Alege mai întâi un cod care are poziții în regiunea curentă.")
+            return false
+        }
+
+        var candidate = navigationIndex + step
+        while (candidate in navigationTargets.indices && navigationCompleted.contains(navigationTargets[candidate])) {
+            candidate += step
+        }
+
+        if (candidate !in navigationTargets.indices) {
+            if (!automatic) {
+                status(if (step > 0) "Ai ajuns la ultima poziție a codului în traseul curent." else "Ești la prima poziție a codului în traseul curent.")
+            }
+            return false
+        }
+
+        navigationIndex = candidate
+        applyGuidanceFocus(announce = !automatic)
+        return true
+    }
+
+    private fun applyGuidanceFocus(announce: Boolean) {
+        val cell = currentGuidanceCell()
+        if (cell == null) {
+            overlayView.setFocusedCell(null, 1)
+            resetGuidanceUi()
+            return
+        }
+
+        val direction = directionFor(cell)
+        overlayView.setFocusedCell(cell, direction)
+        val codeLabel = selectedCode ?: "SIM"
+        val arrow = if (direction > 0) "→" else "←"
+        val directionText = if (direction > 0) "stânga → dreapta" else "dreapta → stânga"
+        guidePositionText.text = "$codeLabel  ${navigationIndex + 1}/${navigationTargets.size}  R${cell.row + 1} C${cell.col + 1}  $arrow"
+        prevTargetButton.isEnabled = navigationIndex > 0
+        nextTargetButton.isEnabled = navigationIndex < navigationTargets.lastIndex
+
+        if (announce) {
+            status("Cod $codeLabel: poziția ${navigationIndex + 1}/${navigationTargets.size}, rând ${cell.row + 1}, coloană ${cell.col + 1}. Direcție $directionText.")
+        }
+    }
+
+    private fun resetGuidance() {
+        navigationTargets = emptyList()
+        navigationCompleted = emptySet()
+        navigationIndex = -1
+        overlayView.setFocusedCell(null, 1)
+        resetGuidanceUi()
+    }
+
+    private fun resetGuidanceUi() {
+        if (::guidePositionText.isInitialized) guidePositionText.text = "Niciun cod ales"
+        if (::prevTargetButton.isInitialized) prevTargetButton.isEnabled = false
+        if (::nextTargetButton.isInitialized) nextTargetButton.isEnabled = false
     }
 
     private fun clearLegendEntries() {
@@ -669,6 +838,7 @@ class MainActivity : AppCompatActivity() {
         analysisCalibration = emptyList()
         anchorTracker.reset()
         progressDetector.resetAll()
+        resetGuidance()
         overlayView.configureGrid(gridRows, gridCols, currentRegion)
         overlayView.setTargets(emptyList(), null)
         overlayView.setCompletedCells(emptySet())
@@ -709,7 +879,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle("Grila Petit Point")
-            .setMessage("Regiunea este porțiunea de diagramă pe care o vezi acum prin cameră. SCAN îți arată separat aproximativ câte celule vede.")
+            .setMessage("Regiunea este porțiunea de diagramă pe care o vezi acum prin cameră. SCAN estimează separat câte celule vede.")
             .setView(container)
             .setNegativeButton("Anulează", null)
             .setPositiveButton("Aplică") { _, _ ->
@@ -730,7 +900,7 @@ class MainActivity : AppCompatActivity() {
                 selectedCode = null
                 targetCount = 0
                 analysisTargets = emptyList()
-                status("Grilă: ${gridRows}×${gridCols}. Regiune cameră: ${visibleRows}×${visibleCols}. Alege codul sau simbolul.")
+                status("Grilă: ${gridRows}×${gridCols}. Regiune cameră: ${visibleRows}×${visibleCols}. Caută codul sau alege simbolul.")
             }
             .show()
     }
@@ -772,9 +942,11 @@ class MainActivity : AppCompatActivity() {
             analysisCalibration = emptyList()
             anchorTracker.reset()
             progressDetector.resetAll()
+            navigationCompleted = emptySet()
             overlayView.setCompletedCells(emptySet())
             overlayView.setTargets(result.first, result.second)
-            status("Simbol manual găsit în $targetCount căsuțe. Poți apăsa Auto-aliniază sau Calibrează.")
+            prepareGuidance(result.first)
+            status("Simbol manual găsit în $targetCount căsuțe. Traseul zig-zag este pregătit; Auto-aliniază sau Calibrează.")
         }
     }
 
@@ -822,6 +994,7 @@ class MainActivity : AppCompatActivity() {
         overlayView.clearCalibration()
         overlayView.setTargets(emptyList(), null)
         overlayView.setCompletedCells(emptySet())
+        overlayView.setFocusedCell(null, 1)
         selectedCell = null
         selectedCode = null
         targetCount = 0
@@ -829,7 +1002,8 @@ class MainActivity : AppCompatActivity() {
         analysisCalibration = emptyList()
         anchorTracker.reset()
         progressDetector.resetAll()
-        status("Suprapunerea a fost resetată. Codurile citite rămân disponibile; poți alege alt cod.")
+        resetGuidance()
+        status("Suprapunerea a fost resetată. Codurile citite rămân disponibile în bara de căutare.")
     }
 
     private fun parsePositive(field: EditText, fallback: Int): Int =
