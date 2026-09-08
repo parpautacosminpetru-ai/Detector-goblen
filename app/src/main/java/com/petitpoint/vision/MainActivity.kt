@@ -37,20 +37,28 @@ import com.petitpoint.vision.model.GridRegion
 import com.petitpoint.vision.model.PatternGrid
 import com.petitpoint.vision.ui.PatternOverlayView
 import com.petitpoint.vision.ui.PatternPickerView
+import com.petitpoint.vision.ui.ScannerOverlayView
 import com.petitpoint.vision.vision.AnchorTracker
 import com.petitpoint.vision.vision.GrayFrame
+import com.petitpoint.vision.vision.GridDetector
 import com.petitpoint.vision.vision.ProgressDetector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var overlayView: PatternOverlayView
+    private lateinit var scannerOverlay: ScannerOverlayView
     private lateinit var statusText: TextView
+    private lateinit var detectorText: TextView
     private lateinit var autoButton: Button
+    private lateinit var scanButton: Button
 
     private var camera: Camera? = null
     private var patternBitmap: Bitmap? = null
@@ -65,9 +73,13 @@ class MainActivity : AppCompatActivity() {
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val anchorTracker = AnchorTracker()
     private val progressDetector = ProgressDetector()
+    private val gridDetector = GridDetector()
 
     @Volatile
     private var autoTrackingEnabled = true
+
+    @Volatile
+    private var scannerEnabled = true
 
     @Volatile
     private var analysisCalibration: List<PointF> = emptyList()
@@ -81,6 +93,19 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var trackingLostAnnounced = false
 
+    @Volatile
+    private var latestScannerCorners: List<PointF> = emptyList()
+
+    @Volatile
+    private var latestScannerConfidence = 0f
+
+    @Volatile
+    private var latestScannerColumns = 0
+
+    @Volatile
+    private var latestScannerRows = 0
+
+    private var scannerFrameCounter = 0
     private var gestureZoomRatio = 1f
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -108,8 +133,14 @@ class MainActivity : AppCompatActivity() {
 
         previewView = findViewById(R.id.previewView)
         overlayView = findViewById(R.id.overlayView)
+        scannerOverlay = findViewById(R.id.scannerOverlay)
         statusText = findViewById(R.id.statusText)
+        detectorText = findViewById(R.id.detectorText)
         autoButton = findViewById(R.id.autoButton)
+        scanButton = findViewById(R.id.scanButton)
+
+        // Garantăm că geometria folosită de analizor este aceeași cu imaginea văzută de utilizator.
+        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
 
         findViewById<Button>(R.id.loadButton).setOnClickListener {
             patternPickerLauncher.launch(arrayOf("image/*"))
@@ -117,11 +148,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.gridButton).setOnClickListener { showGridDialog() }
         findViewById<Button>(R.id.symbolButton).setOnClickListener { showSymbolPicker() }
         findViewById<Button>(R.id.calibrateButton).setOnClickListener { beginCalibration() }
+        findViewById<Button>(R.id.autoAlignButton).setOnClickListener { autoAlignFromScanner() }
         findViewById<Button>(R.id.resetButton).setOnClickListener { resetOverlay() }
         autoButton.setOnClickListener { toggleAutoTracking() }
+        scanButton.setOnClickListener { toggleScanner() }
         findViewById<Button>(R.id.rebaselineButton).setOnClickListener {
             progressDetector.resetBaselineKeepCompleted()
-            status("Progresul rămas va fi reînvățat din imaginea live. Ține mâna în afara cadrului o clipă.")
+            status("Progresul rămas va fi reînvățat din mai multe cadre. Ține mâna în afara cadrului o clipă.")
         }
 
         findViewById<SeekBar>(R.id.opacitySeek).setOnSeekBarChangeListener(
@@ -146,7 +179,7 @@ class MainActivity : AppCompatActivity() {
             anchorTracker.reset()
             progressDetector.resetBaselineKeepCompleted()
             trackingLostAnnounced = false
-            status("Aliniere fixată. AUTO urmărește pânza, iar progresul se învață local. $targetCount poziții urmărite.")
+            status("Aliniere fixată. Scannerul vede separat grila, iar progresul se învață local. $targetCount poziții urmărite.")
         }
 
         setupPinchZoom()
@@ -170,8 +203,9 @@ class MainActivity : AppCompatActivity() {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
 
+            // 640x480 era prea puțin pentru ochiurile foarte fine de Petit Point.
             val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480))
+                .setTargetResolution(Size(1280, 720))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also { useCase ->
@@ -193,9 +227,9 @@ class MainActivity : AppCompatActivity() {
             )
             status(
                 if (patternBitmap == null) {
-                    "Camera live. Încarcă diagrama Petit Point."
+                    "Camera live. SCAN caută deja grila; pentru coduri încarcă și diagrama."
                 } else {
-                    "Camera live. Alege simbolul și calibrează pânza."
+                    "Camera live. SCAN caută grila; alege simbolul pentru suprapunere."
                 }
             )
         }, ContextCompat.getMainExecutor(this))
@@ -205,6 +239,11 @@ class MainActivity : AppCompatActivity() {
         val viewWidth = previewView.width
         val viewHeight = previewView.height
         if (viewWidth <= 0 || viewHeight <= 0) return
+
+        scannerFrameCounter++
+        if (scannerEnabled && scannerFrameCounter % 3 == 0) {
+            processScanner(frame, viewWidth, viewHeight)
+        }
 
         var points = analysisCalibration.map { PointF(it.x, it.y) }
 
@@ -225,7 +264,7 @@ class MainActivity : AppCompatActivity() {
                 } else if (!trackingLostAnnounced) {
                     trackingLostAnnounced = true
                     overlayView.post {
-                        status("AUTO a pierdut temporar reperele. Ține pânza în cadru; dacă nu revine, apasă Calibrează.")
+                        status("AUTO a pierdut temporar reperele. SCAN rămâne activ; dacă nu revine, folosește Auto-aliniază sau Calibrează.")
                     }
                 }
             }
@@ -247,7 +286,7 @@ class MainActivity : AppCompatActivity() {
         val progress = progressDetector.process(frame, samples)
         if (progress.baselineJustCaptured) {
             overlayView.post {
-                status("Progres învățat. Pe măsură ce coși, pozițiile stabile detectate ca executate dispar din ghidaj.")
+                status("Referința live este stabilă. Când o cusătură schimbă persistent celula, ea dispare din ghidaj.")
             }
         }
         if (progress.newlyCompleted.isNotEmpty()) {
@@ -257,6 +296,71 @@ class MainActivity : AppCompatActivity() {
                 status("Detectate ${completed.size} executate din $targetCount pentru simbolul selectat.")
             }
         }
+    }
+
+    private fun processScanner(frame: GrayFrame, viewWidth: Int, viewHeight: Int) {
+        val detection = gridDetector.detect(frame)
+        latestScannerConfidence = detection.confidence
+
+        val verticalView = detection.verticalLines.mapNotNull { x ->
+            val p = frame.frameToView(PointF(x, frame.height / 2f), viewWidth, viewHeight)
+            p.x.takeIf { it >= 0f && it <= viewWidth.toFloat() }
+        }.sorted()
+
+        val horizontalView = detection.horizontalLines.mapNotNull { y ->
+            val p = frame.frameToView(PointF(frame.width / 2f, y), viewWidth, viewHeight)
+            p.y.takeIf { it >= 0f && it <= viewHeight.toFloat() }
+        }.sorted()
+
+        latestScannerColumns = (verticalView.size - 1).coerceAtLeast(0)
+        latestScannerRows = (horizontalView.size - 1).coerceAtLeast(0)
+
+        val usableV = verticalView.filter { it > viewWidth * 0.03f && it < viewWidth * 0.97f }
+        val usableH = horizontalView.filter { it > viewHeight * 0.06f && it < viewHeight * 0.94f }
+        latestScannerCorners = if (usableV.size >= 3 && usableH.size >= 3) {
+            listOf(
+                PointF(usableV.first(), usableH.first()),
+                PointF(usableV.last(), usableH.first()),
+                PointF(usableV.last(), usableH.last()),
+                PointF(usableV.first(), usableH.last())
+            )
+        } else {
+            emptyList()
+        }
+
+        scannerOverlay.post {
+            scannerOverlay.setDetectedGrid(verticalView, horizontalView, detection.confidence)
+            detectorText.text = when {
+                detection.confidence >= 0.45f -> {
+                    "SCAN: GRILĂ clară ${(detection.confidence * 100).toInt()}% · pas ${"%.1f".format(detection.cellWidthPx)}×${"%.1f".format(detection.cellHeightPx)} px · ≈$latestScannerColumns×$latestScannerRows celule"
+                }
+                detection.confidence >= 0.18f -> {
+                    "SCAN: grilă posibilă ${(detection.confidence * 100).toInt()}% · apropie/zoom pentru precizie"
+                }
+                else -> {
+                    "SCAN: caut grila… ține telefonul drept, focalizează pânza și mărește până se văd ochiurile"
+                }
+            }
+        }
+    }
+
+    private fun autoAlignFromScanner() {
+        if (patternGrid == null || selectedCell == null) {
+            status("Pentru suprapunerea codului: încarcă diagrama și alege mai întâi simbolul. SCAN poate vedea grila și fără diagramă.")
+            return
+        }
+        val corners = latestScannerCorners.map { PointF(it.x, it.y) }
+        if (latestScannerConfidence < 0.18f || corners.size != 4) {
+            status("SCAN nu are încă o grilă suficient de stabilă. Apropie camera, fă zoom și așteaptă să apară liniile verzi.")
+            return
+        }
+
+        overlayView.setTrackedCalibrationPoints(corners)
+        analysisCalibration = corners
+        anchorTracker.reset()
+        progressDetector.resetBaselineKeepCompleted()
+        trackingLostAnnounced = false
+        status("Auto-aliniat pe grila detectată (≈$latestScannerColumns×$latestScannerRows celule vizibile). Dacă regiunea diagramei are alt număr, corectează din Grilă.")
     }
 
     private fun mapTargetsToFrame(
@@ -284,13 +388,35 @@ class MainActivity : AppCompatActivity() {
         val matrix = Matrix()
         if (!matrix.setPolyToPoly(src, 0, dst, 0, 4)) return emptyList()
 
+        fun distance(a: PointF, b: PointF): Float = hypot(a.x - b.x, a.y - b.y)
+        val topWidth = distance(points[0], points[1])
+        val bottomWidth = distance(points[3], points[2])
+        val leftHeight = distance(points[0], points[3])
+        val rightHeight = distance(points[1], points[2])
+        val cellWidthView = ((topWidth + bottomWidth) * 0.5f) / region.colCount.coerceAtLeast(1)
+        val cellHeightView = ((leftHeight + rightHeight) * 0.5f) / region.rowCount.coerceAtLeast(1)
+        val viewScale = max(
+            viewWidth.toFloat() / frame.width.toFloat(),
+            viewHeight.toFloat() / frame.height.toFloat()
+        )
+        val sampleRadius = ((min(cellWidthView, cellHeightView) / viewScale) * 0.38f)
+            .toInt()
+            .coerceIn(3, 14)
+
         val result = ArrayList<ProgressDetector.CellSample>()
         for (cell in targets) {
             if (!region.contains(cell)) continue
             val xy = floatArrayOf(cell.col + 0.5f, cell.row + 0.5f)
             matrix.mapPoints(xy)
             val framePoint = frame.viewToFrame(PointF(xy[0], xy[1]), viewWidth, viewHeight) ?: continue
-            result.add(ProgressDetector.CellSample(cell, framePoint.x, framePoint.y))
+            result.add(
+                ProgressDetector.CellSample(
+                    cell = cell,
+                    frameX = framePoint.x,
+                    frameY = framePoint.y,
+                    radius = sampleRadius
+                )
+            )
         }
         return result
     }
@@ -326,7 +452,6 @@ class MainActivity : AppCompatActivity() {
                         analysisCalibration = overlayView.calibrationPointsSnapshot()
                         anchorTracker.reset()
                         progressDetector.resetBaselineKeepCompleted()
-                        status("Zoom ${"%.1f".format(requested)}×. Suprapunerea a fost scalată; AUTO o rafinează din camera live.")
                     }
                     return true
                 }
@@ -360,7 +485,7 @@ class MainActivity : AppCompatActivity() {
             progressDetector.resetAll()
             overlayView.setCompletedCells(emptySet())
             rebuildPatternGrid()
-            status("Diagrama este încărcată. Configurează rândurile/coloanele, apoi alege un simbol.")
+            status("Diagrama este încărcată. Configurează rândurile/coloanele, apoi atinge simbolul dorit.")
             showGridDialog()
         }
     }
@@ -421,7 +546,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle("Grila Petit Point")
-            .setMessage("Regiunea este porțiunea de diagramă pe care o vezi acum prin cameră.")
+            .setMessage("Regiunea este porțiunea de diagramă pe care o vezi acum prin cameră. SCAN îți arată separat aproximativ câte celule vede.")
             .setView(container)
             .setNegativeButton("Anulează", null)
             .setPositiveButton("Aplică") { _, _ ->
@@ -473,7 +598,7 @@ class MainActivity : AppCompatActivity() {
         status("Compar simbolul ales cu toate celulele diagramei…")
         lifecycleScope.launch {
             val result = withContext(Dispatchers.Default) {
-                val matches = grid.matchingCells(cell)
+                val matches = grid.matchingCells(cell, maxDistance = 0.24f)
                 val symbol = grid.symbolBitmap(cell)
                 matches to symbol
             }
@@ -484,7 +609,7 @@ class MainActivity : AppCompatActivity() {
             progressDetector.resetAll()
             overlayView.setCompletedCells(emptySet())
             overlayView.setTargets(result.first, result.second)
-            status("Simbol găsit în $targetCount căsuțe. Acum apasă Calibrează.")
+            status("Simbol găsit în $targetCount căsuțe. Dacă vezi liniile verzi, poți apăsa Auto-aliniază; altfel Calibrează manual.")
         }
     }
 
@@ -503,13 +628,26 @@ class MainActivity : AppCompatActivity() {
         overlayView.beginCalibration()
     }
 
+    private fun toggleScanner() {
+        scannerEnabled = !scannerEnabled
+        scanButton.text = if (scannerEnabled) "SCAN: ON" else "SCAN: OFF"
+        if (!scannerEnabled) {
+            scannerOverlay.clearDetectedGrid()
+            detectorText.text = "SCAN: oprit"
+            latestScannerCorners = emptyList()
+            latestScannerConfidence = 0f
+        } else {
+            detectorText.text = "SCAN: caut grila Petit Point…"
+        }
+    }
+
     private fun toggleAutoTracking() {
         autoTrackingEnabled = !autoTrackingEnabled
         autoButton.text = if (autoTrackingEnabled) "AUTO: ON" else "AUTO: OFF"
         anchorTracker.reset()
         if (autoTrackingEnabled && overlayView.hasCalibration()) {
             analysisCalibration = overlayView.calibrationPointsSnapshot()
-            status("Urmărirea automată este pornită. Telefonul poate corecta mici deplasări ale pânzei.")
+            status("Urmărirea automată este pornită. SCAN-ul verde rămâne un detector independent.")
         } else {
             status("Urmărirea automată este oprită. Suprapunerea rămâne pe ultima calibrare.")
         }
@@ -525,7 +663,7 @@ class MainActivity : AppCompatActivity() {
         analysisCalibration = emptyList()
         anchorTracker.reset()
         progressDetector.resetAll()
-        status("Suprapunerea a fost resetată. Alege din nou simbolul.")
+        status("Suprapunerea a fost resetată. SCAN continuă să detecteze grila live.")
     }
 
     private fun parsePositive(field: EditText, fallback: Int): Int =

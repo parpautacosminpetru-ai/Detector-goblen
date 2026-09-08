@@ -5,16 +5,17 @@ import kotlin.math.abs
 import kotlin.math.max
 
 /**
- * Detector experimental de progres. Memorează aspectul fiecărei poziții țintă după calibrare și
- * consideră o căsuță executată numai dacă schimbarea locală rămâne stabilă mai multe cadre.
- * Schimbările foarte mari sau simultane sunt tratate ca mână/umbră și nu sunt validate.
+ * Detector de progres pentru Petit Point. Pentru fiecare celula tinta invata mai multe cadre de
+ * referinta, apoi cauta o schimbare locala persistenta. Raza mostrei este adaptata la marimea
+ * celulei pe ecran, ca sa nu ratam firul foarte fin.
  */
 class ProgressDetector {
 
     data class CellSample(
         val cell: GridCell,
         val frameX: Float,
-        val frameY: Float
+        val frameY: Float,
+        val radius: Int = 5
     )
 
     data class Result(
@@ -26,21 +27,25 @@ class ProgressDetector {
     private data class Baseline(
         var correctedMean: Float,
         var gradient: Float,
+        var samples: Int = 1,
         var consecutiveChanged: Int = 0
     )
 
     private val baselines = HashMap<GridCell, Baseline>()
     private val completed = HashSet<GridCell>()
+    private var baselineAnnounced = false
 
     @Synchronized
     fun resetAll() {
         baselines.clear()
         completed.clear()
+        baselineAnnounced = false
     }
 
     @Synchronized
     fun resetBaselineKeepCompleted() {
         baselines.clear()
+        baselineAnnounced = false
     }
 
     @Synchronized
@@ -51,71 +56,81 @@ class ProgressDetector {
         if (samples.isEmpty()) return Result()
 
         val globalMean = frame.globalMean()
-        val addedThisFrame = HashSet<GridCell>()
-        var hadAnyBaselineBefore = baselines.isNotEmpty()
 
-        // Învățăm pozițiile care nu au încă referință. Cele deja marcate executate nu mai contează.
+        // Mai intai construim o referinta stabila din mai multe cadre; un singur cadru e prea fragil
+        // pentru petit point si poate prinde degetul imediat dupa calibrare.
+        var readyInView = 0
+        var baselinesInView = 0
         for (sample in samples) {
-            if (completed.contains(sample.cell) || baselines.containsKey(sample.cell)) continue
-            val stats = frame.localStats(sample.frameX, sample.frameY) ?: continue
-            baselines[sample.cell] = Baseline(
-                correctedMean = stats.mean - globalMean,
-                gradient = stats.gradient
-            )
-            addedThisFrame.add(sample.cell)
+            if (completed.contains(sample.cell)) continue
+            val stats = frame.localStats(sample.frameX, sample.frameY, sample.radius.coerceIn(3, 16)) ?: continue
+            val correctedMean = stats.mean - globalMean
+            val baseline = baselines[sample.cell]
+            if (baseline == null) {
+                baselines[sample.cell] = Baseline(correctedMean, stats.gradient)
+            } else if (baseline.samples < BASELINE_FRAMES) {
+                val nextCount = baseline.samples + 1
+                val alpha = 1f / nextCount.toFloat()
+                baseline.correctedMean += (correctedMean - baseline.correctedMean) * alpha
+                baseline.gradient += (stats.gradient - baseline.gradient) * alpha
+                baseline.samples = nextCount
+            }
+            val current = baselines[sample.cell] ?: continue
+            baselinesInView++
+            if (current.samples >= BASELINE_FRAMES) readyInView++
         }
 
-        if (!hadAnyBaselineBefore && addedThisFrame.isNotEmpty()) {
-            return Result(baselineJustCaptured = true)
-        }
+        val enoughBaseline = baselinesInView > 0 && readyInView >= max(1, (baselinesInView * 0.70f).toInt())
+        if (!enoughBaseline) return Result()
 
-        data class Candidate(val cell: GridCell, val distance: Float, val stats: GrayFrame.LocalStats)
+        val baselineJustCaptured = !baselineAnnounced
+        baselineAnnounced = true
+
+        data class Candidate(val cell: GridCell, val distance: Float)
         val candidates = ArrayList<Candidate>()
-        val stableSamples = ArrayList<Pair<GridCell, GrayFrame.LocalStats>>()
+        val stable = ArrayList<Pair<GridCell, GrayFrame.LocalStats>>()
 
         for (sample in samples) {
-            if (completed.contains(sample.cell) || addedThisFrame.contains(sample.cell)) continue
+            if (completed.contains(sample.cell)) continue
             val baseline = baselines[sample.cell] ?: continue
-            val stats = frame.localStats(sample.frameX, sample.frameY) ?: continue
+            if (baseline.samples < BASELINE_FRAMES) continue
+            val stats = frame.localStats(sample.frameX, sample.frameY, sample.radius.coerceIn(3, 16)) ?: continue
             val correctedMean = stats.mean - globalMean
             val meanDelta = abs(correctedMean - baseline.correctedMean)
             val gradientDelta = abs(stats.gradient - baseline.gradient)
-            val distance = meanDelta * 0.72f + gradientDelta * 0.95f
+
+            // Firul poate avea aproape aceeasi luminozitate ca panza, de aceea muchiile cantaresc mai mult.
+            val distance = meanDelta * 0.58f + gradientDelta * 1.35f
+            val threshold = (5.5f + baseline.gradient * 0.28f).coerceIn(6.2f, 12.5f)
+            val hardOcclusion = threshold * 4.4f
 
             when {
-                distance > HARD_OCCLUSION_DISTANCE -> {
-                    baseline.consecutiveChanged = 0
-                }
-                distance >= CHANGE_THRESHOLD -> {
-                    candidates.add(Candidate(sample.cell, distance, stats))
-                }
+                distance > hardOcclusion -> baseline.consecutiveChanged = 0
+                distance >= threshold -> candidates.add(Candidate(sample.cell, distance))
                 else -> {
                     baseline.consecutiveChanged = 0
-                    stableSamples.add(sample.cell to stats)
+                    stable.add(sample.cell to stats)
                 }
             }
         }
 
-        // Dacă multe ținte se schimbă în același cadru, de obicei este mâna, o umbră sau camera.
-        val maxAllowedChanged = max(6, (samples.size * 0.32f).toInt())
+        // Mana/umbra modifica simultan multe celule; nu le marcam ca fiind cusute.
+        val maxAllowedChanged = max(7, (samples.size * 0.42f).toInt())
         if (candidates.size > maxAllowedChanged) {
-            for (candidate in candidates) {
-                baselines[candidate.cell]?.consecutiveChanged = 0
-            }
-            return Result(occlusionRejected = true)
+            for (candidate in candidates) baselines[candidate.cell]?.consecutiveChanged = 0
+            return Result(baselineJustCaptured = baselineJustCaptured, occlusionRejected = true)
         }
 
-        // Adaptare foarte lentă la lumină/expunere, doar pentru pozițiile care par neschimbate.
-        for ((cell, stats) in stableSamples) {
+        // Adaptare lenta la schimbari de expunere.
+        for ((cell, stats) in stable) {
             val baseline = baselines[cell] ?: continue
             val correctedMean = stats.mean - globalMean
-            baseline.correctedMean = baseline.correctedMean * 0.985f + correctedMean * 0.015f
-            baseline.gradient = baseline.gradient * 0.985f + stats.gradient * 0.015f
+            baseline.correctedMean = baseline.correctedMean * 0.992f + correctedMean * 0.008f
+            baseline.gradient = baseline.gradient * 0.992f + stats.gradient * 0.008f
         }
 
-        val newlyCompleted = HashSet<GridCell>()
         val candidateCells = candidates.mapTo(HashSet()) { it.cell }
-
+        val newlyCompleted = HashSet<GridCell>()
         for (candidate in candidates) {
             val baseline = baselines[candidate.cell] ?: continue
             baseline.consecutiveChanged++
@@ -126,17 +141,18 @@ class ProgressDetector {
             }
         }
 
-        // Orice bază care nu mai este candidat își pierde seria de confirmări.
         for ((cell, baseline) in baselines) {
             if (!candidateCells.contains(cell)) baseline.consecutiveChanged = 0
         }
 
-        return Result(newlyCompleted = newlyCompleted)
+        return Result(
+            newlyCompleted = newlyCompleted,
+            baselineJustCaptured = baselineJustCaptured
+        )
     }
 
     private companion object {
-        const val CHANGE_THRESHOLD = 14.5f
-        const val HARD_OCCLUSION_DISTANCE = 55f
-        const val REQUIRED_STABLE_FRAMES = 8
+        const val BASELINE_FRAMES = 6
+        const val REQUIRED_STABLE_FRAMES = 4
     }
 }

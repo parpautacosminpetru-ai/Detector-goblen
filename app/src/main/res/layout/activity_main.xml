@@ -11,21 +11,45 @@
         android:layout_height="match_parent"
         app:scaleType="fillCenter" />
 
+    <com.petitpoint.vision.ui.ScannerOverlayView
+        android:id="@+id/scannerOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <com.petitpoint.vision.ui.PatternOverlayView
         android:id="@+id/overlayView"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <TextView
-        android:id="@+id/statusText"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
-        android:background="#99000000"
-        android:padding="12dp"
-        android:text="Încarcă diagrama Petit Point"
-        android:textColor="#FFFFFF"
-        android:textSize="16sp" />
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#99000000"
+            android:padding="10dp"
+            android:text="Camera live"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/detectorText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#AA00352A"
+            android:paddingStart="10dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="5dp"
+            android:text="SCAN: caut grila Petit Point…"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp" />
+    </LinearLayout>
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -95,6 +119,18 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/calibrate" />
+
+                <Button
+                    android:id="@+id/scanButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="SCAN: ON" />
+
+                <Button
+                    android:id="@+id/autoAlignButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Auto-aliniază" />
 
                 <Button
                     android:id="@+id/autoButton"
