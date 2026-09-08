@@ -14,10 +14,15 @@ import android.view.View
 import com.petitpoint.vision.model.GridCell
 import com.petitpoint.vision.model.GridRegion
 import com.petitpoint.vision.vision.NeedleGuidanceState
+import kotlin.math.max
 
 /**
- * Suprapunere AR cu perspectivă. Patru puncte ancorează regiunea diagramei pe pânza reală.
- * Poziția curentă din traseul de lucru este evidențiată separat și primește o săgeată de sens.
+ * Suprapunere AR pentru Petit Point.
+ *
+ * În modul de lucru desenăm doar forma simbolului, cu fundal transparent, direct peste ochiul
+ * real al pânzei. Imaginea paginii nu este afișată peste cameră. Patru puncte interne descriu
+ * transformarea geometrică a regiunii curente; GoblenActivity le poate calcula și dintr-o singură
+ * atingere după ce scannerul a estimat pasul ochiurilor.
  */
 class PatternOverlayView @JvmOverloads constructor(
     context: Context,
@@ -27,47 +32,42 @@ class PatternOverlayView @JvmOverloads constructor(
     private val calibrationPoints = ArrayList<PointF>(4)
     private val perspective = Matrix()
 
-    private val targetPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = Color.rgb(255, 214, 10)
-        alpha = 110
-    }
-    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        color = Color.rgb(0, 255, 170)
-        strokeWidth = 0.06f
-        alpha = 230
-    }
     private val symbolPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-        alpha = 130
+        alpha = 238
     }
-    private val focusFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = Color.WHITE
-        alpha = 80
-    }
-    private val focusBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+
+    private val focusRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.MAGENTA
-        strokeWidth = 0.18f
+        color = Color.CYAN
+        strokeWidth = 0.14f
         alpha = 255
     }
+
+    private val focusDotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.WHITE
+        alpha = 245
+    }
+
     private val focusArrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         color = Color.WHITE
-        strokeWidth = 0.13f
+        strokeWidth = 0.11f
         strokeCap = Paint.Cap.ROUND
-        alpha = 255
+        alpha = 245
     }
+
     private val pointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
         color = Color.MAGENTA
     }
+
     private val pointTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         textSize = 32f
         textAlign = Paint.Align.CENTER
     }
+
     private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 4f
@@ -85,7 +85,9 @@ class PatternOverlayView @JvmOverloads constructor(
     private var region = GridRegion(0, 0, 1, 1)
     private var targets: List<GridCell> = emptyList()
     private var completedCells: Set<GridCell> = emptySet()
-    private var selectedSymbol: Bitmap? = null
+
+    private var sourceSymbol: Bitmap? = null
+    private var floatingSymbol: Bitmap? = null
     private var focusedCell: GridCell? = null
     private var focusedHorizontalDirection = 1
 
@@ -99,9 +101,17 @@ class PatternOverlayView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * Primește pozițiile logice ale codului și bitmap-ul simbolului. Bitmap-ul original rămâne al
+     * apelantului; aici construim o mască transparentă de contrast ridicat pentru afișare AR.
+     */
     fun setTargets(cells: List<GridCell>, symbolBitmap: Bitmap?) {
         targets = cells
-        selectedSymbol = symbolBitmap
+        if (sourceSymbol !== symbolBitmap) {
+            sourceSymbol = symbolBitmap
+            floatingSymbol?.takeIf { !it.isRecycled }?.recycle()
+            floatingSymbol = symbolBitmap?.let(::makeFloatingSymbol)
+        }
         if (focusedCell != null && !targets.contains(focusedCell)) {
             focusedCell = null
             NeedleGuidanceState.setFocusedCell(null)
@@ -122,9 +132,7 @@ class PatternOverlayView @JvmOverloads constructor(
     }
 
     fun setOverlayOpacity(alpha: Int) {
-        val safe = alpha.coerceIn(20, 240)
-        targetPaint.alpha = (safe * 0.75f).toInt()
-        symbolPaint.alpha = safe
+        symbolPaint.alpha = alpha.coerceIn(70, 255)
         invalidate()
     }
 
@@ -157,6 +165,10 @@ class PatternOverlayView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * Folosit când camera face zoom după calibrare. CameraX face crop în jurul centrului imaginii,
+     * deci aceeași transformare de scalare menține etichetele lipite de pânză.
+     */
     fun scaleCalibrationAbout(centerX: Float, centerY: Float, factor: Float) {
         if (calibrationPoints.size != 4 || !factor.isFinite() || factor <= 0f) return
         for (point in calibrationPoints) {
@@ -195,18 +207,14 @@ class PatternOverlayView @JvmOverloads constructor(
         canvas.save()
         canvas.concat(perspective)
 
-        val visibleTargets = targets.asSequence()
-            .filter { it.row in 0 until totalRows && it.col in 0 until totalCols }
-            .filter { region.contains(it) }
-            .filterNot { completedCells.contains(it) }
-
-        for (cell in visibleTargets) {
-            val rect = cellRect(cell)
-            canvas.drawRect(rect, targetPaint)
-            selectedSymbol?.let { symbol ->
+        val symbol = floatingSymbol
+        if (symbol != null && !symbol.isRecycled) {
+            for (cell in targets) {
+                if (cell.row !in 0 until totalRows || cell.col !in 0 until totalCols) continue
+                if (!region.contains(cell) || completedCells.contains(cell)) continue
+                val rect = symbolRect(cell)
                 canvas.drawBitmap(symbol, null, rect, symbolPaint)
             }
-            canvas.drawRect(rect, borderPaint)
         }
 
         val focus = focusedCell
@@ -217,42 +225,47 @@ class PatternOverlayView @JvmOverloads constructor(
         canvas.restore()
     }
 
-    private fun cellRect(cell: GridCell): RectF = RectF(
-        cell.col.toFloat(),
-        cell.row.toFloat(),
-        cell.col + 1f,
-        cell.row + 1f
-    )
+    private fun symbolRect(cell: GridCell): RectF {
+        val inset = 0.08f
+        return RectF(
+            cell.col + inset,
+            cell.row + inset,
+            cell.col + 1f - inset,
+            cell.row + 1f - inset
+        )
+    }
 
     private fun drawFocusedCell(canvas: Canvas, cell: GridCell) {
-        val rect = cellRect(cell)
-        canvas.drawRect(rect, focusFillPaint)
-        canvas.drawRect(
-            RectF(rect.left - 0.08f, rect.top - 0.08f, rect.right + 0.08f, rect.bottom + 0.08f),
-            focusBorderPaint
-        )
-
+        val cx = cell.col + 0.5f
         val cy = cell.row + 0.5f
+        val ring = RectF(
+            cell.col - 0.10f,
+            cell.row - 0.10f,
+            cell.col + 1.10f,
+            cell.row + 1.10f
+        )
+        canvas.drawOval(ring, focusRingPaint)
+        canvas.drawCircle(cx, cy, 0.07f, focusDotPaint)
+
         val startX: Float
         val endX: Float
         if (focusedHorizontalDirection > 0) {
-            startX = cell.col + 0.18f
-            endX = cell.col + 0.82f
+            startX = cell.col + 0.12f
+            endX = cell.col + 0.88f
         } else {
-            startX = cell.col + 0.82f
-            endX = cell.col + 0.18f
+            startX = cell.col + 0.88f
+            endX = cell.col + 0.12f
         }
-        canvas.drawLine(startX, cy, endX, cy, focusArrowPaint)
-
-        val head = 0.16f
+        val arrowY = cell.row - 0.24f
+        canvas.drawLine(startX, arrowY, endX, arrowY, focusArrowPaint)
         val sign = if (focusedHorizontalDirection > 0) 1f else -1f
-        canvas.drawLine(endX, cy, endX - sign * head, cy - head, focusArrowPaint)
-        canvas.drawLine(endX, cy, endX - sign * head, cy + head, focusArrowPaint)
+        val head = 0.14f
+        canvas.drawLine(endX, arrowY, endX - sign * head, arrowY - head, focusArrowPaint)
+        canvas.drawLine(endX, arrowY, endX - sign * head, arrowY + head, focusArrowPaint)
     }
 
     private fun drawCalibrationGuides(canvas: Canvas) {
         if (calibrationPoints.isEmpty() || !calibrationMode) return
-
         for (i in calibrationPoints.indices) {
             val p = calibrationPoints[i]
             canvas.drawCircle(p.x, p.y, 22f, pointPaint)
@@ -292,11 +305,42 @@ class PatternOverlayView @JvmOverloads constructor(
         return perspective.setPolyToPoly(src, 0, dst, 0, 4)
     }
 
+    private fun makeFloatingSymbol(source: Bitmap): Bitmap {
+        val width = max(1, source.width)
+        val height = max(1, source.height)
+        val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val pixels = IntArray(width * height)
+        source.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        for (i in pixels.indices) {
+            val color = pixels[i]
+            val gray = (Color.red(color) * 30 + Color.green(color) * 59 + Color.blue(color) * 11) / 100
+            if (gray >= 232) {
+                pixels[i] = Color.TRANSPARENT
+            } else {
+                val darkness = 255 - gray
+                val alpha = (110 + darkness * 1.15f).toInt().coerceIn(120, 255)
+                // Magenta intens rămâne vizibil atât pe pânza deschisă, cât și peste zone cusute.
+                pixels[i] = Color.argb(alpha, 255, 0, 190)
+            }
+        }
+
+        result.setPixels(pixels, 0, width, 0, 0, width, height)
+        return result
+    }
+
     private fun sanitizeRegion(input: GridRegion): GridRegion {
         val startRow = input.startRow.coerceIn(0, totalRows - 1)
         val startCol = input.startCol.coerceIn(0, totalCols - 1)
         val rowCount = input.rowCount.coerceIn(1, totalRows - startRow)
         val colCount = input.colCount.coerceIn(1, totalCols - startCol)
         return GridRegion(startRow, startCol, rowCount, colCount)
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        floatingSymbol?.takeIf { !it.isRecycled }?.recycle()
+        floatingSymbol = null
+        sourceSymbol = null
     }
 }
