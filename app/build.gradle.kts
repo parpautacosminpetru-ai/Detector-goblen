@@ -11,8 +11,8 @@ android {
         applicationId = "com.petitpoint.vision"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
     }
 
     buildTypes {
@@ -48,6 +48,6 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
-    // Păstrăm OCR-ul pentru modul vechi; modul Goblenul meu nu depinde de internet.
+    // OCR inclus în APK: recunoaștem automat numărul "Page N" când se încarcă mai multe pagini.
     implementation("com.google.mlkit:text-recognition:16.0.1")
 }
