@@ -2,38 +2,50 @@
 
 Aplicație Android offline pentru ghidaj vizual la executarea goblenurilor Petit Point.
 
-## Ce face MVP-ul
+## Versiunea 0.2
 
-- deschide camera telefonului în timp real;
-- încarcă o imagine a diagramei de goblen;
-- lucrează cu o grilă configurabilă (rânduri și coloane);
-- alegi o singură căsuță din diagramă, iar aplicația găsește offline toate căsuțele cu același simbol;
-- calibrezi 4 puncte pe pânza reală, în ordinea stânga-sus → dreapta-sus → dreapta-jos → stânga-jos;
-- suprapune în timp real simbolul selectat peste pozițiile corespunzătoare de pe pânză;
-- permite definirea unei regiuni locale din diagramă, utilă când camera vede doar o porțiune a goblenului;
-- pinch-to-zoom pe camera Android; dacă schimbi zoom-ul după calibrare, aplicația cere recalibrare pentru a evita deplasarea suprapunerii;
-- funcționează fără server și fără trimiterea imaginilor în cloud.
+- cameră live CameraX;
+- încărcare locală a diagramei;
+- grilă configurabilă pe rânduri și coloane;
+- selectarea vizuală a unui simbol și găsirea offline a tuturor căsuțelor similare;
+- calibrare în 4 colțuri: stânga-sus → dreapta-sus → dreapta-jos → stânga-jos;
+- simbolurile selectate sunt suprapuse peste pânza reală cu transformare de perspectivă;
+- zoom cu două degete;
+- **AUTO tracking offline**: după calibrare, aplicația memorează textura din jurul celor patru repere și urmărește mici deplasări ale pânzei/gherhefului în fluxul camerei;
+- la zoom, punctele sunt scalate instantaneu, apoi trackerul live rafinează alinierea;
+- **detector experimental de progres**: după calibrare, aplicația memorează aspectul pozițiilor țintă; o schimbare locală care rămâne stabilă mai multe cadre poate fi marcată ca executată, iar acel simbol dispare din ghidaj;
+- protecție de bază contra falselor detecții produse de mână, umbre sau schimbări mari simultane în cadru;
+- buton `Reînvață progres` pentru refacerea referinței vizuale fără a pierde pozițiile deja marcate;
+- funcționare locală, fără server și fără trimiterea imaginilor în cloud.
 
-## Important pentru primul prototip
+## Folosire
 
-Imaginea diagramei trebuie să fie decupată cât mai aproape de grila propriu-zisă. Numărul de rânduri și coloane este introdus de utilizator. Identificarea simbolurilor se face prin compararea vizuală locală a celulelor, nu prin OCR clasic.
+1. Pune telefonul deasupra gherghefului, cât mai stabil.
+2. Încarcă fotografia diagramei și introdu numărul corect de rânduri/coloane.
+3. Definește regiunea din diagramă pe care o vede camera.
+4. Alege o căsuță cu simbolul/codul pe care îl lucrezi.
+5. Apasă `Calibrează` și atinge cele patru colțuri ale regiunii pe pânza văzută prin cameră.
+6. După calibrare, ține mâna în afara cadrului o clipă pentru ca detectorul de progres să învețe referința.
+7. Lucrează normal. `AUTO` încearcă să mențină suprapunerea, iar pozițiile detectate ca executate dispar.
 
-Telefonul trebuie să stea cât mai fix după calibrare. Urmărirea automată a pânzei în timp ce telefonul se mișcă va fi adăugată în etapa următoare.
+## Precizie Petit Point
 
-## Limitarea fizică a acului
+Pentru Petit Point, iluminarea bună, camera fixată și un zoom suficient de mare sunt importante. Trackerul actual este un tracker local de textură, optimizat pentru mici deplasări; nu este încă o localizare globală completă a întregului goblen dacă telefonul este mutat mult sau scos din cadru.
 
-O singură cameră RGB aflată deasupra pânzei nu poate vedea literalmente un ac complet ascuns pe spatele materialului. Putem însă adăuga detectarea vârfului când devine vizibil, estimarea găurii țintă și săgeți de corecție înainte de intrare/ieșire.
+Detectorul de progres este experimental. Un fir foarte apropiat ca luminanță de pânză sau o zonă cu reflexii poate necesita `Reînvață progres` ori recalibrare. Pragurile vor fi rafinate pe fotografii reale de Petit Point.
+
+## Acul
+
+O singură cameră RGB aflată deasupra pânzei nu poate vedea literalmente un ac complet ascuns pe spatele materialului. Etapa următoare poate detecta vârful acului când este vizibil, estima gaura țintă și afișa săgeți de corecție înainte de intrare/ieșire.
 
 ## Tehnologii
 
 - Kotlin
 - Android SDK
-- CameraX
-- procesare locală de bitmap pentru gruparea simbolurilor
+- CameraX Preview + ImageAnalysis
+- procesare locală a canalului de luminanță pentru tracking și progres
 - transformare de perspectivă cu `android.graphics.Matrix`
 
 ## Build
 
-Proiectul este configurat pentru Java 17, Android Gradle Plugin 8.7.x și compileSdk 35.
-
-În Android Studio: deschide repository-ul și rulează modulul `app` pe un telefon Android real.
+Proiectul folosește Java 17, compileSdk 35 și are GitHub Actions configurat să producă automat APK-ul debug la fiecare push pe `main`.

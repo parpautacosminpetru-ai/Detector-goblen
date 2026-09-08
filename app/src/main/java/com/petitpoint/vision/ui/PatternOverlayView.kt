@@ -15,8 +15,8 @@ import com.petitpoint.vision.model.GridCell
 import com.petitpoint.vision.model.GridRegion
 
 /**
- * Perspective-aware AR-style overlay. Four screen points anchor a selected chart region to the
- * real cloth visible through CameraX.
+ * Suprapunere AR cu perspectivă. Patru puncte ancorează regiunea diagramei pe pânza reală.
+ * Punctele pot fi apoi mutate automat de tracker fără ca utilizatorul să recalibreze manual.
  */
 class PatternOverlayView @JvmOverloads constructor(
     context: Context,
@@ -65,6 +65,7 @@ class PatternOverlayView @JvmOverloads constructor(
     private var totalCols = 1
     private var region = GridRegion(0, 0, 1, 1)
     private var targets: List<GridCell> = emptyList()
+    private var completedCells: Set<GridCell> = emptySet()
     private var selectedSymbol: Bitmap? = null
 
     fun configureGrid(rows: Int, cols: Int, gridRegion: GridRegion) {
@@ -78,6 +79,11 @@ class PatternOverlayView @JvmOverloads constructor(
     fun setTargets(cells: List<GridCell>, symbolBitmap: Bitmap?) {
         targets = cells
         selectedSymbol = symbolBitmap
+        invalidate()
+    }
+
+    fun setCompletedCells(cells: Set<GridCell>) {
+        completedCells = cells.toSet()
         invalidate()
     }
 
@@ -103,6 +109,33 @@ class PatternOverlayView @JvmOverloads constructor(
     }
 
     fun hasCalibration(): Boolean = calibrationPoints.size == 4
+
+    fun calibrationPointsSnapshot(): List<PointF> =
+        calibrationPoints.map { PointF(it.x, it.y) }
+
+    /** Primește cele patru puncte rafinate de trackerul din fluxul camerei. */
+    fun setTrackedCalibrationPoints(points: List<PointF>) {
+        if (points.size != 4) return
+        calibrationPoints.clear()
+        calibrationPoints.addAll(points.map { PointF(it.x, it.y) })
+        calibrationMode = false
+        rebuildPerspective()
+        invalidate()
+    }
+
+    /**
+     * CameraX face zoom prin crop în jurul centrului. Scalarea punctelor în jurul centrului e o
+     * aproximație foarte bună instantanee, după care trackerul live rafinează poziția.
+     */
+    fun scaleCalibrationAbout(centerX: Float, centerY: Float, factor: Float) {
+        if (calibrationPoints.size != 4 || !factor.isFinite() || factor <= 0f) return
+        for (point in calibrationPoints) {
+            point.x = centerX + (point.x - centerX) * factor
+            point.y = centerY + (point.y - centerY) * factor
+        }
+        rebuildPerspective()
+        invalidate()
+    }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!calibrationMode) return false
@@ -135,6 +168,7 @@ class PatternOverlayView @JvmOverloads constructor(
         val visibleTargets = targets.asSequence()
             .filter { it.row in 0 until totalRows && it.col in 0 until totalCols }
             .filter { region.contains(it) }
+            .filterNot { completedCells.contains(it) }
 
         for (cell in visibleTargets) {
             val rect = RectF(
@@ -153,7 +187,7 @@ class PatternOverlayView @JvmOverloads constructor(
     }
 
     private fun drawCalibrationGuides(canvas: Canvas) {
-        if (calibrationPoints.isEmpty()) return
+        if (calibrationPoints.isEmpty() || !calibrationMode) return
 
         for (i in calibrationPoints.indices) {
             val p = calibrationPoints[i]
